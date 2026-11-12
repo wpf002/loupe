@@ -119,7 +119,7 @@ Check the totals and album counts. Then the full run:
 uv run loupe scan
 ```
 
-Later milestones, once built:
+Then, in order:
 
 ```bash
 uv run loupe embed
@@ -127,8 +127,27 @@ uv run loupe train
 uv run loupe classify
 uv run loupe review
 uv run loupe write-albums
+```
+
+`write-albums` without `--apply` is a dry run. Only run `--apply` from her desktop
+after she has looked at the review pages:
+
+```bash
 uv run loupe write-albums --apply
 ```
 
-`write-albums` without `--apply` is a dry run. Only run `--apply` after she has
-looked at the review pages.
+## 9. Brand And Content
+
+```bash
+cp config/brand.example.toml config/brand.toml
+```
+
+Fill in her colours, font file paths and three to five past captions, then:
+
+```bash
+uv run loupe brand
+uv run loupe transcribe
+uv run loupe app --open
+```
+
+The app runs on http://127.0.0.1:8765 in her account only.
