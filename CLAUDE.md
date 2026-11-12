@@ -16,10 +16,12 @@ against them.
    `LOUPE_ALBUM_FOLDER`. Loupe creates that folder and owns everything in it.
 3. `write-albums` is a dry run unless `--apply` is passed. The dry run prints
    per-album counts.
-4. Nothing under `data/` is ever committed. No photo, preview, embedding, face
-   data, location, or transcript leaves this machine.
-5. The Claude second pass is off by default, sits behind an explicit flag, and
-   sends downsized previews only. Do not build it until asked.
+4. Nothing under `data/` is ever committed. Nothing leaves this machine except
+   what the generation stages (M10 on) send to the Claude API: downsized previews,
+   transcripts, and her own text. Never send originals, embeddings, face data, or
+   GPS coordinates.
+5. Claude API calls read `ANTHROPIC_API_KEY` from `.env` and log counts and UUIDs
+   only. The owner approved sending her content to Claude on 2026-11-12.
 6. No Apple ID, password, or token goes in the repo, the config, or a log line.
 7. Every stage is keyed by photo UUID and is safe to re-run. A crash at item
    150,000 resumes at 150,000.
@@ -80,12 +82,29 @@ Every command takes `--limit N` so it can be tested on a small slice.
   and opens a contact sheet. Filters: pillar, media type, person (from scan), and
   zero-shot facets scored from the M2 embeddings: light (natural, artificial),
   shot type (close-up, medium, wide, selfie), setting (indoor, outdoor).
+- **M7 `loupe brand`**: one brand profile in `config/brand.toml`: colours, fonts
+  (local font files), voice samples (her past captions). The image bank is M6.
+- **M8 `loupe transcribe`**: local speech-to-text with word timestamps for
+  talking clips whose originals are local.
+- **M9 `loupe cut`**: remove dead air and filler words from a take using the
+  transcript timestamps. ffmpeg only. Writes to `data/renders/`, never to Photos.
+- **M10 `loupe hooks`**: Claude writes six hook openings for one take in her
+  voice. Render the picked one as a reel: word-by-word captions in brand font and
+  colour, chosen length, comment word on the end card.
+- **M11 `loupe week`**: Claude plans Mon to Sun across pillars and formats (reel,
+  carousel, story), picks assets through M6 search, and drafts captions.
+- **M12 `loupe carousel`**: render carousel slides as images in brand fonts and
+  colours from the M11 drafts.
+- **M13 Everything**: story frames and email drafts from the week plan.
+- **M14 Local app**: Brand, Hooks, Week and Everything tabs over the CLI stages,
+  served on localhost.
 
 ## Later, Not Now
 
 - MCP server exposing `search_media(query, pillar, media_type)`.
-- Transcription of talking clips.
 - Corrections loop: items the owner removes from a Loupe album become negatives.
+- Posting or scheduling to Instagram.
+- AI avatar video.
 
 ## Config
 
