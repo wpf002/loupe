@@ -1,5 +1,7 @@
 """Loupe command line. Commands get added milestone by milestone (see CLAUDE.md)."""
 
+import sqlite3
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -19,6 +21,7 @@ from loupe.settings import (
     owner_account_problem,
 )
 from loupe.train import PillarModel
+from loupe.transcribe import Transcript
 from loupe.vectors import VectorStore
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -457,3 +460,71 @@ def transcribe(limit: LimitOption = None) -> None:
     console.print(f"Transcribed {result.transcribed} clips, {result.talking} with talking.")
     for reason, count in result.skipped.items():
         console.print(f"Skipped {count}: {reason}")
+
+
+def _original_path(settings: Settings, uuid: str) -> Path:
+    from loupe.library import LibraryNotFoundError, original_paths, resolve_library_path
+
+    _require_owner_account(settings)
+    try:
+        library_path = resolve_library_path(settings.photos_library)
+    except LibraryNotFoundError as error:
+        raise _fail(str(error)) from error
+    found = original_paths(library_path, [uuid]).get(uuid)
+    if found is None:
+        raise _fail(f"original for {uuid} is not on this Mac")
+    return found
+
+
+def _take(connection: sqlite3.Connection, uuid: str) -> tuple[Transcript, float]:
+    from loupe.transcribe import load_transcript, talking_clips
+
+    if uuid not in talking_clips(connection):
+        raise _fail(f"{uuid} is not a transcribed talking clip. Run `loupe cut` to list them.")
+    transcript = load_transcript(connection, uuid)
+    row = connection.execute(
+        "SELECT duration_seconds FROM items WHERE uuid = ?", (uuid,)
+    ).fetchone()
+    if transcript is None or row is None or row[0] is None:
+        raise _fail(f"{uuid} has no transcript or duration")
+    return transcript, float(row[0])
+
+
+@app.command()
+def cut(
+    uuid: Annotated[str | None, typer.Argument(help="Take to cut. Omit to list takes.")] = None,
+    limit: LimitOption = None,
+) -> None:
+    """M9: remove dead air and filler words from a take. Writes to data/renders/."""
+    from loupe.audio import AudioError
+    from loupe.cut import cut_path, plan_cut, render_cut
+    from loupe.transcribe import talking_clips
+
+    settings = _load_settings()
+    connection = connect(settings.index_path)
+    try:
+        if uuid is None:
+            table = Table("Take", "Seconds", "Words")
+            for take in talking_clips(connection)[:limit]:
+                seconds, words = connection.execute(
+                    "SELECT items.duration_seconds, transcripts.word_count FROM items "
+                    "JOIN transcripts ON transcripts.uuid = items.uuid WHERE items.uuid = ?",
+                    (take,),
+                ).fetchone()
+                table.add_row(take, f"{seconds:.1f}", str(words))
+            console.print(table)
+            return
+        transcript, seconds = _take(connection, uuid)
+    finally:
+        connection.close()
+    plan = plan_cut(transcript, seconds)
+    target = cut_path(settings.data_dir / "renders", uuid)
+    try:
+        render_cut(_original_path(settings, uuid), target, plan)
+    except (AudioError, ValueError) as error:
+        raise _fail(f"cut failed for {uuid}: {error}") from error
+    console.print(
+        f"Kept {plan.kept_seconds:.1f}s of {plan.source_seconds:.1f}s in {len(plan.ranges)} "
+        f"ranges, {plan.fillers_removed} fillers removed."
+    )
+    console.print(f"Render: {target}")

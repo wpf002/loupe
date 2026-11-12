@@ -19,23 +19,28 @@ def ffmpeg_exe() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def decode_audio(path: Path, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """Mono float32 samples in [-1, 1]. Reads the file; never writes next to it."""
-    if not path.is_file():
-        raise AudioError("original not on disk")
-    command = [
-        ffmpeg_exe(), "-nostdin", "-v", "error", "-i", str(path),
-        "-vn", "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "-",
-    ]  # fmt: skip
+def run_ffmpeg(arguments: list[str], timeout: int = DECODE_TIMEOUT_SECONDS) -> bytes:
+    """Run the bundled ffmpeg with an argument list (no shell). Returns stdout."""
+    command = [ffmpeg_exe(), "-nostdin", "-v", "error", *arguments]
     try:
         completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            command, capture_output=True, timeout=DECODE_TIMEOUT_SECONDS, check=False
+            command, capture_output=True, timeout=timeout, check=False
         )
     except subprocess.TimeoutExpired as error:
         raise AudioError("ffmpeg timed out") from error
     if completed.returncode != 0:
         raise AudioError(f"ffmpeg exited with {completed.returncode}")
-    samples = np.frombuffer(completed.stdout, dtype=np.int16)
+    return completed.stdout
+
+
+def decode_audio(path: Path, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+    """Mono float32 samples in [-1, 1]. Reads the file; never writes next to it."""
+    if not path.is_file():
+        raise AudioError("original not on disk")
+    stdout = run_ffmpeg(
+        ["-i", str(path), "-vn", "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "-"]
+    )
+    samples = np.frombuffer(stdout, dtype=np.int16)
     if samples.size == 0:
         raise AudioError("no audio track")
     return samples.astype(np.float32) / PCM_SCALE
