@@ -60,6 +60,16 @@ MIGRATIONS: tuple[str, ...] = (
         PRIMARY KEY (model, uuid)
     );
     """,
+    """
+    CREATE TABLE pillar_scores (
+        uuid TEXT NOT NULL REFERENCES items(uuid) ON DELETE CASCADE,
+        pillar TEXT NOT NULL,
+        probability REAL NOT NULL,
+        scored_at TEXT NOT NULL,
+        PRIMARY KEY (uuid, pillar)
+    );
+    CREATE INDEX pillar_scores_by_pillar ON pillar_scores(pillar, probability DESC);
+    """,
 )
 
 

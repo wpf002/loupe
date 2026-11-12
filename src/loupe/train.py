@@ -74,7 +74,7 @@ def model_path(data_dir: Path) -> Path:
     return data_dir / "models" / MODEL_FILENAME
 
 
-def _pillar_albums(connection: sqlite3.Connection, config: PillarConfig) -> dict[str, set[str]]:
+def pillar_members(connection: sqlite3.Connection, config: PillarConfig) -> dict[str, set[str]]:
     rows = connection.execute(
         """
         SELECT item_albums.uuid, item_albums.album FROM item_albums
@@ -112,7 +112,7 @@ def load_training_set(
     limit: int | None = None,
 ) -> TrainingSet:
     rows = embedded_rows(connection, model_id)
-    albums = _pillar_albums(connection, config)
+    albums = pillar_members(connection, config)
     labeled = [uuid for uuid in rows if uuid in albums]
     if limit is not None:
         labeled = labeled[:limit]

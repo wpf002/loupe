@@ -17,6 +17,7 @@ from loupe.settings import (
     load_settings,
     owner_account_problem,
 )
+from loupe.train import PillarModel
 from loupe.vectors import VectorStore
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -235,3 +236,57 @@ def train(limit: LimitOption = None) -> None:
             small.add_row(pillar, str(count))
         console.print(small)
         console.print(f"Need {config.min_examples_per_pillar} per pillar.")
+
+
+def _load_model(settings: Settings) -> PillarModel:
+    from loupe.train import TrainingError, load_model, model_path
+
+    try:
+        return load_model(model_path(settings.data_dir))
+    except TrainingError as error:
+        raise _fail(str(error)) from error
+
+
+@app.command()
+def classify(limit: LimitOption = None) -> None:
+    """M4: score every item outside her pillar albums."""
+    from loupe.classify import classify_items
+
+    settings = _load_settings()
+    config = _load_config()
+    _require_owner_account(settings)
+    model = _load_model(settings)
+    connection = connect(settings.index_path)
+    try:
+        store = _open_vectors(settings, model.model_id)
+        result = classify_items(connection, store, model, config, limit)
+    finally:
+        connection.close()
+    table = Table("Pillar", "Confident", "Borderline")
+    for pillar in model.pillars:
+        table.add_row(pillar, str(result.confident[pillar]), str(result.borderline[pillar]))
+    console.print(table)
+    console.print(f"Scored {result.scored} items, purged {result.purged} stale scores.")
+
+
+@app.command()
+def review(
+    open_page: Annotated[bool, typer.Option("--open", help="Open the index page.")] = False,
+) -> None:
+    """M4: write a contact sheet per pillar to data/review/."""
+    import webbrowser
+
+    from loupe.review import write_review
+
+    settings = _load_settings()
+    config = _load_config()
+    _require_owner_account(settings)
+    model = _load_model(settings)
+    connection = connect(settings.index_path)
+    try:
+        pages = write_review(connection, model.pillars, config, settings.data_dir / "review")
+    finally:
+        connection.close()
+    console.print(f"Wrote {len(pages.pillars)} pillar sheets. Index: {pages.index}")
+    if open_page:
+        webbrowser.open(pages.index.resolve().as_uri())
