@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from loupe.embed import load_preview
+from loupe.previews import load_preview
 
 THUMBNAIL_EDGE = 480
 THUMBNAIL_QUALITY = 82

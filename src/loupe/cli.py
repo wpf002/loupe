@@ -649,14 +649,14 @@ def carousel(
 ) -> None:
     """M12: render the week's carousels as slide images. Writes to data/renders/."""
     from loupe.carousel import carousel_dir, render_carousel
-    from loupe.studio import planned_week, posts_with_covers, renders_dir
+    from loupe.studio import covers_dir, planned_week, posts_with_covers, renders_dir
 
     settings = _load_settings()
     profile = _load_brand()
     connection = connect(settings.index_path)
     try:
         planned = _studio(lambda: planned_week(connection, start))
-        jobs = posts_with_covers(connection, planned, "carousel", day)
+        jobs = posts_with_covers(connection, planned, "carousel", day, covers_dir(settings))
     finally:
         connection.close()
     if not jobs:

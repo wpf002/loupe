@@ -7,28 +7,19 @@ from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import StrEnum
 from itertools import batched
 from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
-from PIL import Image, ImageOps, UnidentifiedImageError
-from pillow_heif import register_heif_opener
+from PIL import Image
 
 from loupe.index import eligible_uuids
+from loupe.previews import SkipReason, load_preview
 from loupe.vectors import VectorStore
-
-register_heif_opener()
 
 BATCH_SIZE = 32
 LOADER_THREADS = 8
-
-
-class SkipReason(StrEnum):
-    NO_PREVIEW = "no local preview"
-    MISSING_FILE = "preview file missing"
-    UNREADABLE = "unreadable image"
 
 
 class ImageEncoder(Protocol):
@@ -102,19 +93,6 @@ def purge_ineligible(connection: sqlite3.Connection, store: VectorStore, model_i
             [(model_id, uuid) for uuid, _ in rows],
         )
     return len(rows)
-
-
-def load_preview(preview_path: str | None) -> Image.Image | SkipReason:
-    if preview_path is None:
-        return SkipReason.NO_PREVIEW
-    path = Path(preview_path)
-    if not path.is_file():
-        return SkipReason.MISSING_FILE
-    try:
-        with Image.open(path) as image:
-            return ImageOps.exif_transpose(image).convert("RGB")
-    except (UnidentifiedImageError, OSError, ValueError):
-        return SkipReason.UNREADABLE
 
 
 def _prepare(

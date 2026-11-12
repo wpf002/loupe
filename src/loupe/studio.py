@@ -260,21 +260,33 @@ def planned_week(connection: sqlite3.Connection, start: str | None) -> PlannedWe
     return planned
 
 
-def cover_preview(connection: sqlite3.Connection, planned: PlannedWeek, index: int) -> Path | None:
+def covers_dir(settings: Settings) -> Path:
+    return settings.data_dir / "covers"
+
+
+def cover_preview(
+    connection: sqlite3.Connection, planned: PlannedWeek, index: int, cache_dir: Path
+) -> Path | None:
+    from loupe.previews import preview_file
+
     assets = planned.assets.get(index, [])
     if not assets:
         return None
     row = connection.execute(
         "SELECT preview_path FROM items WHERE uuid = ?", (assets[0],)
     ).fetchone()
-    return Path(row[0]) if row and row[0] else None
+    return preview_file(row[0], cache_dir) if row else None
 
 
 def posts_with_covers(
-    connection: sqlite3.Connection, planned: PlannedWeek, post_format: str, day: str | None
+    connection: sqlite3.Connection,
+    planned: PlannedWeek,
+    post_format: str,
+    day: str | None,
+    cache_dir: Path,
 ) -> list[tuple[PlannedPost, Path | None]]:
     return [
-        (post, cover_preview(connection, planned, index))
+        (post, cover_preview(connection, planned, index, cache_dir))
         for index, post in enumerate(planned.plan.posts)
         if post.format == post_format and (day is None or post.day == day.title())
     ]
@@ -297,8 +309,8 @@ def build_everything(
     from loupe.newsletter import email_for_week, email_text
     from loupe.story import render_story, story_dir
 
-    carousels = posts_with_covers(connection, planned, "carousel", None)
-    stories = posts_with_covers(connection, planned, "story", None)
+    carousels = posts_with_covers(connection, planned, "carousel", None, covers_dir(settings))
+    stories = posts_with_covers(connection, planned, "story", None, covers_dir(settings))
     try:
         draft = email_for_week(connection, planned, brand, client_factory(), fresh)
     except ClaudeError as error:
