@@ -29,3 +29,6 @@ build/
 
 # macOS
 .DS_Store
+
+# Her brand profile holds her captions. It stays on this Mac.
+config/brand.toml

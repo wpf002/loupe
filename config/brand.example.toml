@@ -1,0 +1,28 @@
+# Copy to config/brand.toml (gitignored) and fill in. `loupe brand` checks it.
+
+name = "Brand Name"
+
+[colors]
+# Hex values. ink is text, paper is backgrounds, accent is the one loud colour.
+ink = "#1D1B17"
+paper = "#F6F1E7"
+accent = "#C2552B"
+secondary = "#2F4A3A"
+
+[fonts]
+# Local font files (.ttf or .otf). Display is for hooks and titles, body for captions.
+display = "~/Library/Fonts/Display.otf"
+body = "~/Library/Fonts/Body.otf"
+
+[voice]
+# How she talks, in a few words each.
+traits = ["warm", "direct", "funny"]
+# Words and phrases she never uses.
+avoid = ["hey guys"]
+# Comment word used on reel end cards unless a command overrides it.
+comment_word = "LINK"
+# Paste 10 to 30 of her past captions, one per entry, exactly as posted.
+samples = [
+  "Example caption one.",
+  "Example caption two.",
+]

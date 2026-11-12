@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.table import Table
 
 from loupe import __version__
+from loupe.brand import BrandProfile
 from loupe.config import ConfigError, PillarConfig, load_pillar_config
 from loupe.doctor import CheckResult, run_doctor
 from loupe.index import IndexTotals, album_counts, connect, totals
@@ -385,3 +386,38 @@ def search_command(
     console.print(f"{len(hits)} results. Sheet: {sheet}")
     if open_page:
         webbrowser.open(sheet.resolve().as_uri())
+
+
+def _load_brand() -> BrandProfile:
+    from loupe.brand import BrandError, load_brand
+
+    try:
+        return load_brand()
+    except BrandError as error:
+        raise _fail(str(error)) from error
+
+
+@app.command()
+def brand(
+    open_page: Annotated[bool, typer.Option("--open", help="Open the preview page.")] = False,
+) -> None:
+    """M7: check config/brand.toml and write a preview page."""
+    import webbrowser
+
+    from loupe.brand import brand_preview_html
+
+    settings = _load_settings()
+    profile = _load_brand()
+    table = Table("Brand", "Value")
+    table.add_row("Colours", ", ".join(profile.colors.model_dump().values()))
+    table.add_row("Display Font", profile.fonts.display.name)
+    table.add_row("Body Font", profile.fonts.body.name)
+    table.add_row("Voice Samples", str(len(profile.voice.samples)))
+    table.add_row("Comment Word", profile.voice.comment_word)
+    console.print(table)
+    preview = settings.data_dir / "brand" / "index.html"
+    preview.parent.mkdir(parents=True, exist_ok=True)
+    preview.write_text(brand_preview_html(profile))
+    console.print(f"Preview: {preview}")
+    if open_page:
+        webbrowser.open(preview.resolve().as_uri())
