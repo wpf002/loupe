@@ -142,3 +142,43 @@ def scan(limit: LimitOption = None) -> None:
         console.print(_albums_table(album_counts(connection), config))
     finally:
         connection.close()
+
+
+@app.command()
+def embed(limit: LimitOption = None) -> None:
+    """M2: embed every eligible preview with SigLIP on MPS. Safe to re-run."""
+    from rich.progress import Progress
+
+    from loupe.embed import embed_items, pending_work, vector_path
+    from loupe.encoder import SiglipEncoder
+    from loupe.vectors import VectorStore, VectorStoreError
+
+    settings = _load_settings()
+    _require_owner_account(settings)
+    connection = connect(settings.index_path)
+    try:
+        console.print("Loading SigLIP model...")
+        encoder = SiglipEncoder()
+        try:
+            store = VectorStore(vector_path(settings.data_dir, encoder.model_id), encoder.dim)
+        except VectorStoreError as error:
+            raise _fail(str(error)) from error
+        total = len(pending_work(connection, encoder.model_id, limit))
+        with Progress(console=console) as progress:
+            task = progress.add_task("Embedding", total=total)
+            result = embed_items(
+                connection,
+                store,
+                encoder,
+                limit,
+                on_batch=lambda count: progress.advance(task, count),
+            )
+        table = Table("Result", "Count")
+        table.add_row("Embedded", str(result.embedded))
+        for reason, count in sorted(result.skipped.items()):
+            table.add_row(f"Skipped: {reason}", str(count))
+        table.add_row("Purged (now excluded)", str(result.purged))
+        console.print(table)
+        console.print(f"{result.seconds:.1f}s, {result.per_second:.1f} items/sec")
+    finally:
+        connection.close()

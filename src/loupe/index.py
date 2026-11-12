@@ -44,6 +44,22 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX item_persons_by_person ON item_persons(person);
     """,
+    """
+    CREATE TABLE embeddings (
+        model TEXT NOT NULL,
+        uuid TEXT NOT NULL REFERENCES items(uuid) ON DELETE CASCADE,
+        vector_row INTEGER NOT NULL,
+        embedded_at TEXT NOT NULL,
+        PRIMARY KEY (model, uuid),
+        UNIQUE (model, vector_row)
+    );
+    CREATE TABLE embed_skips (
+        model TEXT NOT NULL,
+        uuid TEXT NOT NULL REFERENCES items(uuid) ON DELETE CASCADE,
+        reason TEXT NOT NULL,
+        PRIMARY KEY (model, uuid)
+    );
+    """,
 )
 
 
