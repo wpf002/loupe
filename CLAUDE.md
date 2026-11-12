@@ -98,6 +98,12 @@ Every command takes `--limit N` so it can be tested on a small slice.
 - **M13 Everything**: story frames and email drafts from the week plan.
 - **M14 Local app**: Brand, Hooks, Week and Everything tabs over the CLI stages,
   served on localhost.
+- **M15 Mac app**: Loupe.app any Mac user installs on their own Mac. Reads and
+  writes albums through PhotoKit, so access is the macOS "Allow access to photos"
+  prompt. No credentials, no SSH, no Full Disk Access. Replaces `osxphotos` reads
+  and `photoscript` writes. Signed and notarized, Python pipeline bundled. The
+  owner check becomes the installing user plus their PhotoKit grant; it must stay
+  as strict as rule 10. Start after Amanda's results justify it.
 
 ## Later, Not Now
 
