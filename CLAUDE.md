@@ -17,20 +17,26 @@ against them.
 3. `write-albums` is a dry run unless `--apply` is passed. The dry run prints
    per-album counts.
 4. Nothing under `data/` is ever committed. Nothing leaves this machine except
-   what the generation stages (M10 on) send to the Claude API: downsized previews,
-   transcripts, and her own text. Never send originals, embeddings, face data, or
-   GPS coordinates.
-5. Claude API calls read `ANTHROPIC_API_KEY` from `.env` and log counts and UUIDs
-   only. The owner approved sending her content to Claude on 2026-11-12.
+   what the generation stages (M10 on) send to Claude: downsized previews,
+   transcripts, and her own text. In the app these pass through the Loupe server
+   (`server/`), which forwards them to the Claude API and never stores or logs
+   them. Never send originals, embeddings, face data, or GPS coordinates.
+5. The CLI reads `ANTHROPIC_API_KEY` from `.env`. The app sends the account's
+   session token to the Loupe server, and the Anthropic key lives only on the
+   server. Both log counts and UUIDs only. The owner approved sending her content
+   to Claude on 2026-11-12, and Will approved routing it through the server.
 6. No Apple ID, password, or token goes in the repo, the config, or a log line.
 7. Every stage is keyed by photo UUID and is safe to re-run. A crash at item
    150,000 resumes at 150,000.
 8. Skip hidden and recently deleted items. Screenshots, screen recordings and
    bursts are indexed and flagged but kept out of pillar albums.
 9. Log counts and UUIDs. Never log file contents, faces, or GPS coordinates.
-10. Loupe opens a Photos library only in the macOS account named by
-    `LOUPE_OWNER_MACOS_USER`. Never weaken this check. The developer's own
-    library is never read, scanned, or used as a stand-in.
+10. The CLI opens a Photos library only in the macOS account named by
+    `LOUPE_OWNER_MACOS_USER`. The app reads Photos only through PhotoKit, only
+    after the user signs into a Loupe account and grants access, and records the
+    macOS user who granted it; it refuses any other user. Never weaken either
+    check. The developer's own library is never read, scanned, or used as a
+    stand-in.
 11. Items matching `[exclusions]` in the config, and hidden items, are stored as
     UUID plus reason only. Person names are stored for eligible items only and
     never logged. Every stage after scan reads its work list from
@@ -39,7 +45,8 @@ against them.
 ## Stack
 
 - Python 3.12, managed with `uv`. Lint with `ruff`, test with `pytest`.
-- `osxphotos` to read the library. `photoscript` (ships with it) to write albums.
+- `osxphotos` to read the library and `photoscript` to write albums in the CLI. The
+  app uses PhotoKit through `pyobjc-framework-Photos` for both.
 - `open_clip` with a SigLIP checkpoint on the `mps` device for embeddings.
 - `scikit-learn` one-vs-rest logistic regression on the embeddings.
 - SQLite for the index. Float16 `.npy` memmap for vectors, row order tied to a
@@ -98,12 +105,17 @@ Every command takes `--limit N` so it can be tested on a small slice.
 - **M13 Everything**: story frames and email drafts from the week plan.
 - **M14 Local app**: Brand, Hooks, Week and Everything tabs over the CLI stages,
   served on localhost.
-- **M15 Mac app**: Loupe.app any Mac user installs on their own Mac. Reads and
-  writes albums through PhotoKit, so access is the macOS "Allow access to photos"
-  prompt. No credentials, no SSH, no Full Disk Access. Replaces `osxphotos` reads
-  and `photoscript` writes. Signed and notarized, Python pipeline bundled. The
-  owner check becomes the installing user plus their PhotoKit grant; it must stay
-  as strict as rule 10. Start after Amanda's results justify it.
+- **M15 Mac app**: Loupe.app any Mac user installs on their own Mac. First run:
+  create or sign into a Loupe account, then Connect Photos (the macOS "Allow
+  access to photos" prompt), then Scan. Reads and writes albums through PhotoKit
+  (`loupe.photokit`), so no Full Disk Access, no SSH, no Apple ID. Previews are
+  pulled from PhotoKit on demand, never cached in bulk. Person names are not
+  available through PhotoKit, so app users exclude people by album. The session
+  token lives in the macOS Keychain. Claude calls go through `server/`.
+- **M15 Server** (`server/`): TypeScript, Fastify, Prisma, Postgres. Accounts
+  (argon2), opaque session tokens stored as SHA-256, a `/v1/messages` proxy that
+  holds the Anthropic key, allowlists the model, caps `max_tokens` and enforces a
+  monthly token cap per account. Never stores or logs request or response bodies.
 
 ## Later, Not Now
 

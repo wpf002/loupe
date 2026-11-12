@@ -1,0 +1,39 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Account {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  sessions     Session[]
+  usage        Usage[]
+}
+
+/// Only the SHA-256 of a session token is stored. The token itself never is.
+model Session {
+  tokenHash String   @id
+  accountId String   @db.Uuid
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([accountId])
+}
+
+/// Token counts per account per calendar month (UTC), for the monthly cap.
+model Usage {
+  accountId    String  @db.Uuid
+  month        String
+  inputTokens  Int     @default(0)
+  outputTokens Int     @default(0)
+  account      Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@id([accountId, month])
+}
