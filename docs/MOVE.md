@@ -12,10 +12,44 @@ Loupe refuses to open a Photos library in any account other than the one named i
 3. Open Photos. Settings > iCloud: iCloud Photos on, Optimize Mac Storage on.
 4. Wait until the bottom of the Library view no longer shows syncing progress.
 
-## 2. Permissions
+## 2. Access From The Developer's Account
 
-System Settings > Privacy & Security > Full Disk Access: turn on the terminal app
-you'll use. Quit and reopen it.
+Her library stays in her account. The developer works on it over SSH to
+localhost, so every command runs as her user and the owner-account check passes.
+Never sign her Apple ID into the developer's account; it would replace that
+account's iCloud Photos.
+
+In her account:
+
+1. System Settings > General > Sharing > Remote Login: on.
+2. Click the info button next to Remote Login. Allow access for her user only.
+   Turn on "Allow full disk access for remote users".
+
+In the developer's account:
+
+```bash
+ssh-keygen -t ed25519
+```
+
+```bash
+ssh-copy-id <her-user>@localhost
+```
+
+She types her macOS password once. Then check:
+
+```bash
+ssh <her-user>@localhost whoami
+```
+
+To run Claude Code there, add an SSH connection to `<her-user>@localhost` in the
+Claude desktop app and start sessions on it, or run `ssh <her-user>@localhost`
+and then `claude`. Steps 3 to 8 below can all run over this connection.
+
+`write-albums --apply` controls the Photos app, which needs her logged-in
+desktop session and the Automation prompt. Run that one command from her desktop.
+
+To revoke access, turn off Remote Login or remove the key from her
+`~/.ssh/authorized_keys`.
 
 ## 3. Install Tools
 
@@ -65,7 +99,8 @@ stand-in pillars.
 uv run loupe doctor
 ```
 
-Every row must say OK. Each failure prints its fix.
+Every row must say OK. Each failure prints its fix. Over SSH, a Full Disk Access
+failure means the Remote Login full disk access toggle in step 2 is off.
 
 ## 7. Fill Config
 
