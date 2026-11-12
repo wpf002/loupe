@@ -239,6 +239,14 @@ def eligible_uuids(connection: sqlite3.Connection) -> list[str]:
     return [row[0] for row in rows]
 
 
+def is_eligible(connection: sqlite3.Connection, uuid: str) -> bool:
+    """Same rule as eligible_uuids, for one item."""
+    row = connection.execute(
+        "SELECT 1 FROM items WHERE uuid = ? AND excluded_reason IS NULL", (uuid,)
+    ).fetchone()
+    return row is not None
+
+
 def album_counts(connection: sqlite3.Connection) -> dict[str, int]:
     rows = connection.execute(
         """

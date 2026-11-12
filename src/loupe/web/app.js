@@ -1,0 +1,333 @@
+"use strict";
+
+const TOKEN = document.querySelector('meta[name="loupe-token"]').content;
+const TABS = ["brand", "hooks", "week", "everything"];
+const DEFAULT_LENGTH = 30;
+const TOAST_MS = 1800;
+
+/* DOM builder. Text goes through textContent only, never innerHTML. */
+function h(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === "class") node.className = value;
+    else if (key === "text") node.textContent = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value === true ? "" : value);
+  }
+  for (const child of children.flat()) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+async function api(method, path, body) {
+  const options = { method, headers: {} };
+  if (method === "POST") {
+    options.headers["Content-Type"] = "application/json";
+    options.headers["X-Loupe-Token"] = TOKEN;
+    options.body = JSON.stringify(body || {});
+  }
+  const response = await fetch(path, options);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
+  return payload;
+}
+
+function toast(message) {
+  const node = document.getElementById("toast");
+  node.textContent = message;
+  node.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => node.classList.remove("show"), TOAST_MS);
+}
+
+function alertBox(message) {
+  return h("div", { class: "alert", role: "alert" }, h("b", { text: "Error" }), h("span", { text: message }));
+}
+
+function emptyState(title, command, action) {
+  return h("div", { class: "empty" },
+    h("span", { class: "lens", "aria-hidden": "true" }),
+    h("h2", { text: title }),
+    command ? h("code", { text: command }) : null,
+    action || null);
+}
+
+function skeleton(...heights) {
+  return h("div", { class: "stack", "aria-busy": "true", "aria-label": "Loading" },
+    heights.map((height) => {
+      const block = h("div", { class: "skeleton" });
+      block.style.height = `${height}px`;
+      return block;
+    }));
+}
+
+function button(label, onclick, primary = false) {
+  return h("button", { class: primary ? "button primary" : "button", type: "button", onclick }, label);
+}
+
+/* Runs a POST behind a button: busy state while it runs, error banner if it fails. */
+async function busy(control, panel, work) {
+  control.disabled = true;
+  control.setAttribute("aria-busy", "true");
+  panel.querySelector(".alert")?.remove();
+  try {
+    return await work();
+  } catch (error) {
+    panel.prepend(alertBox(error.message));
+    return null;
+  } finally {
+    control.disabled = false;
+    control.removeAttribute("aria-busy");
+  }
+}
+
+function seconds(value) {
+  const whole = Math.round(value);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+function weekLabel(start) {
+  const day = new Date(`${start}T12:00:00`);
+  return day.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function head(title, ...actions) {
+  return h("div", { class: "head" }, h("h1", { text: title }), h("div", { class: "actions" }, actions));
+}
+
+/* Brand */
+async function renderBrand(panel) {
+  const brand = await api("GET", "/api/brand");
+  const names = { ink: "Ink", paper: "Paper", accent: "Accent", secondary: "Secondary" };
+  const swatches = Object.entries(names).map(([key, label]) => {
+    const fill = h("div", { class: "fill" });
+    fill.style.background = brand.colors[key];
+    return h("div", { class: "swatch" }, fill, h("span", { class: "label", text: label }),
+      h("span", { class: "mono", text: brand.colors[key].toUpperCase() }));
+  });
+  panel.replaceChildren(
+    head(brand.name),
+    h("div", { class: "brand-grid" },
+      h("div", { class: "card specimen" },
+        h("div", { class: "display", text: brand.voice.samples[0] }),
+        h("p", { class: "body-sample", text: brand.voice.samples[1] || "" }),
+        h("div", { class: "font-row" },
+          h("div", {}, h("div", { class: "label", text: "Display" }), h("div", { class: "mono", text: brand.fonts.display })),
+          h("div", {}, h("div", { class: "label", text: "Body" }), h("div", { class: "mono", text: brand.fonts.body }))),
+        h("div", { class: "swatches" }, swatches)),
+      h("div", { class: "stack" },
+        h("div", { class: "card" },
+          h("div", { class: "label", text: "Voice" }),
+          h("div", { class: "chips" }, brand.voice.traits.map((trait) => h("span", { class: "chip", text: trait })))),
+        h("div", { class: "card" },
+          h("div", { class: "label", text: "Avoid" }),
+          h("div", { class: "chips" }, brand.voice.avoid.map((word) => h("span", { class: "chip off", text: word })))),
+        h("div", { class: "card" },
+          h("div", { class: "label", text: "Comment Word" }),
+          h("div", { class: "chips" }, h("span", { class: "chip soft", text: brand.voice.comment_word.toUpperCase() }))),
+        h("div", { class: "card" },
+          h("div", { class: "label", text: "Captions" }),
+          h("div", { class: "samples" }, brand.voice.samples.map((sample) => h("blockquote", { text: sample })))))));
+}
+
+/* Hooks */
+const hookState = { uuid: null, hook: 1, length: DEFAULT_LENGTH };
+
+async function renderHooks(panel) {
+  const { takes } = await api("GET", "/api/takes");
+  if (!takes.length) {
+    panel.replaceChildren(head("Hooks"), emptyState("No Takes", "loupe transcribe"));
+    return;
+  }
+  if (!takes.some((take) => take.uuid === hookState.uuid)) hookState.uuid = takes[0].uuid;
+  const center = h("div", {});
+  const preview = h("div", { class: "preview" });
+  const rail = h("div", { class: "card rail", role: "list", "aria-label": "Takes" },
+    takes.map((take) => h("button", {
+      class: "take", type: "button", role: "listitem",
+      "aria-current": take.uuid === hookState.uuid ? "true" : "false",
+      onclick: () => { hookState.uuid = take.uuid; hookState.hook = 1; renderHooks(panel); },
+    },
+    h("span", { class: "meta" },
+      h("span", { class: "mono", text: `${seconds(take.seconds)} · ${take.words} words` }),
+      h("span", { class: take.has_hooks ? "dot on" : "dot", title: take.has_hooks ? "Has hooks" : "No hooks" })),
+    h("span", { class: "opening", text: take.opening }))));
+  panel.replaceChildren(head("Hooks"), h("div", { class: "studio" }, rail, center, preview));
+  const take = takes.find((row) => row.uuid === hookState.uuid);
+  center.append(skeleton(56, 72, 72, 72));
+  const data = await api("GET", `/api/takes/${take.uuid}/hooks`);
+  drawHookColumn(panel, center, take, data);
+  drawPreview(panel, preview, take, data);
+}
+
+function drawHookColumn(panel, center, take, data) {
+  const write = button(data.hooks ? "New Hooks" : "Write Hooks", async () => {
+    const result = await busy(write, panel, () =>
+      api("POST", `/api/takes/${take.uuid}/hooks`, { fresh: Boolean(data.hooks) }));
+    if (result) { hookState.hook = 1; renderHooks(panel); }
+  }, !data.hooks);
+  const top = h("div", { class: "take-head" },
+    h("span", { class: "label", text: `${seconds(take.seconds)} · ${take.words} words` }), write);
+  if (!data.hooks) {
+    center.replaceChildren(top, emptyState("No Hooks Yet", null));
+    return;
+  }
+  const rendered = new Set(data.reels.map((reel) => reel.hook));
+  const list = h("div", { class: "hook-list", role: "radiogroup", "aria-label": "Hooks" },
+    data.hooks.map((line, index) => {
+      const number = index + 1;
+      return h("button", {
+        class: "hook", type: "button", role: "radio",
+        "aria-checked": number === hookState.hook ? "true" : "false",
+        onclick: () => { hookState.hook = number; drawHookColumn(panel, center, take, data); drawPreview(panel, panel.querySelector(".preview"), take, data); },
+      },
+      h("span", { class: "number", text: String(number).padStart(2, "0") }),
+      h("span", { class: "line", text: line }),
+      rendered.has(number) ? h("span", { class: "rendered", text: "Rendered" }) : null);
+    }));
+  center.replaceChildren(top, list);
+}
+
+function drawPreview(panel, preview, take, data) {
+  const reel = data.reels.find((item) => item.hook === hookState.hook);
+  const phone = h("div", { class: "phone" },
+    reel ? h("video", { src: reel.url, controls: true, playsinline: true, preload: "metadata" }) : h("span", { text: "No Reel" }));
+  const output = h("output", { for: "length", text: `${hookState.length}s` });
+  const slider = h("input", {
+    id: "length", type: "range", min: "5", max: "90", step: "5", value: String(hookState.length),
+    oninput: (event) => { hookState.length = Number(event.target.value); output.textContent = `${hookState.length}s`; },
+  });
+  const render = button("Render", async () => {
+    const result = await busy(render, panel, () =>
+      api("POST", `/api/takes/${take.uuid}/reel`, { hook: hookState.hook, length: hookState.length }));
+    if (result) { toast(`Reel ${seconds(result.seconds)}`); renderHooks(panel); }
+  }, true);
+  render.disabled = !data.hooks;
+  preview.replaceChildren(phone, h("div", { class: "controls" },
+    h("label", { class: "range", for: "length" },
+      h("span", { class: "row" }, h("span", { class: "label", text: "Length" }), output), slider),
+    render));
+}
+
+/* Week */
+async function renderWeek(panel) {
+  const { week } = await api("GET", "/api/week");
+  const plan = button(week ? "Replan" : "Plan Week", async () => {
+    const result = await busy(plan, panel, () =>
+      api("POST", "/api/week", { start: week ? week.start : null, fresh: Boolean(week) }));
+    if (result) renderWeek(panel);
+  }, !week);
+  if (!week) {
+    panel.replaceChildren(head("Week"), emptyState("No Week Planned", null, plan));
+    return;
+  }
+  const columns = week.posts.map((post) => h("article", { class: "card day" },
+    h("div", { class: "top" },
+      h("span", { class: "label", text: post.day }),
+      h("span", { class: `chip format-${post.format}`, text: post.format[0].toUpperCase() + post.format.slice(1) })),
+    h("div", { class: "angle", text: post.angle }),
+    h("div", { class: "pillar", text: post.pillar }),
+    post.assets.length ? h("div", { class: "thumbs" }, post.assets.slice(0, 4).map((asset) =>
+      h("figure", {},
+        h("img", { src: `/media/thumb/${asset.uuid}`, alt: "", loading: "lazy" }),
+        asset.media_type === "video" ? h("span", { class: "kind", text: "Video" }) : null))) : null,
+    h("details", { class: "caption" }, h("summary", { text: "Caption" }), h("p", { text: post.caption }))));
+  panel.replaceChildren(head(`Week of ${weekLabel(week.start)}`, plan), h("div", { class: "board" }, columns));
+}
+
+/* Everything */
+async function renderEverything(panel) {
+  const data = await api("GET", "/api/everything");
+  if (!data.start) {
+    panel.replaceChildren(head("Everything"), emptyState("No Week Planned", null,
+      button("Open Week", () => { location.hash = "#week"; }, true)));
+    return;
+  }
+  const built = data.carousels.length || data.stories.length || data.email;
+  const build = button(built ? "Rebuild" : "Build", async () => {
+    const result = await busy(build, panel, () => api("POST", "/api/everything", { start: data.start, fresh: Boolean(built) }));
+    if (result) { toast("Built"); renderEverything(panel); }
+  }, !built);
+  if (!built) {
+    panel.replaceChildren(head(`Everything · ${weekLabel(data.start)}`), emptyState("Nothing Built", null, build));
+    return;
+  }
+  const setGroup = (title, sets, tall) => sets.length ? h("section", { class: "set" },
+    h("div", { class: "top" }, h("h3", { text: title }), h("span", { class: "label", text: `${sets.length} Days` })),
+    sets.map((set) => h("div", { class: "set" },
+      h("div", { class: "top" }, h("span", { class: "label", text: set.day }), h("span", { class: "muted", text: set.pillar })),
+      h("div", { class: tall ? "strip tall" : "strip" }, set.files.map((file, index) =>
+        h("a", { href: file, target: "_blank", rel: "noopener", "aria-label": `${set.day} ${index + 1}` },
+          h("img", { src: file, alt: "", loading: "lazy" }))))))) : null;
+  const email = data.email;
+  const copy = email ? button("Copy", async () => {
+    await navigator.clipboard.writeText(`${email.subject}\n\n${email.body}`);
+    toast("Copied");
+  }) : null;
+  const letter = email ? h("aside", { class: "card letter" },
+    h("span", { class: "label", text: "Email" }),
+    h("div", { class: "subject", text: email.subject }),
+    h("div", { class: "muted", text: email.preview }),
+    h("div", { class: "body", text: email.body }),
+    h("div", { class: "actions" }, copy)) : null;
+  panel.replaceChildren(
+    head(`Everything · ${weekLabel(data.start)}`, build),
+    h("div", { class: "everything" },
+      h("div", { class: "sets" }, setGroup("Carousels", data.carousels, false), setGroup("Stories", data.stories, true)),
+      letter));
+}
+
+/* Tabs */
+const RENDERERS = { brand: renderBrand, hooks: renderHooks, week: renderWeek, everything: renderEverything };
+
+async function show(name) {
+  const tab = TABS.includes(name) ? name : "brand";
+  for (const other of TABS) {
+    const control = document.getElementById(`tab-${other}`);
+    control.setAttribute("aria-selected", other === tab ? "true" : "false");
+    control.tabIndex = other === tab ? 0 : -1;
+    document.getElementById(other).hidden = other !== tab;
+  }
+  const panel = document.getElementById(tab);
+  panel.replaceChildren(skeleton(64, 240, 120));
+  try {
+    await RENDERERS[tab](panel);
+  } catch (error) {
+    panel.replaceChildren(alertBox(error.message));
+  }
+}
+
+function wireTabs() {
+  const list = document.querySelector(".tabs");
+  list.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-tab]");
+    if (tab) location.hash = `#${tab.dataset.tab}`;
+  });
+  list.addEventListener("keydown", (event) => {
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+    if (!step) return;
+    const current = TABS.indexOf(location.hash.slice(1) || "brand");
+    const next = TABS[(current + step + TABS.length) % TABS.length];
+    location.hash = `#${next}`;
+    document.getElementById(`tab-${next}`).focus();
+  });
+  window.addEventListener("hashchange", () => show(location.hash.slice(1)));
+}
+
+async function loadState() {
+  try {
+    const state = await api("GET", "/api/state");
+    const parts = [state.brand, `${state.takes} Takes`];
+    if (state.week) parts.push(`Week of ${weekLabel(state.week)}`);
+    document.getElementById("who").textContent = parts.join(" · ");
+  } catch (error) {
+    document.getElementById("who").textContent = "Offline";
+  }
+}
+
+wireTabs();
+loadState();
+show(location.hash.slice(1));

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="loupe-token" content="{{token}}">
+  <title>Loupe</title>
+  <link rel="stylesheet" href="/static/theme.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="bar">
+    <a class="mark" href="#brand" aria-label="Loupe"><span class="lens" aria-hidden="true"></span>Loupe</a>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button role="tab" id="tab-brand" aria-controls="brand" data-tab="brand">Brand</button>
+      <button role="tab" id="tab-hooks" aria-controls="hooks" data-tab="hooks">Hooks</button>
+      <button role="tab" id="tab-week" aria-controls="week" data-tab="week">Week</button>
+      <button role="tab" id="tab-everything" aria-controls="everything" data-tab="everything">Everything</button>
+    </nav>
+    <div class="who" id="who"></div>
+  </header>
+
+  <main>
+    <section class="panel" id="brand" role="tabpanel" aria-labelledby="tab-brand" hidden></section>
+    <section class="panel" id="hooks" role="tabpanel" aria-labelledby="tab-hooks" hidden></section>
+    <section class="panel" id="week" role="tabpanel" aria-labelledby="tab-week" hidden></section>
+    <section class="panel" id="everything" role="tabpanel" aria-labelledby="tab-everything" hidden></section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

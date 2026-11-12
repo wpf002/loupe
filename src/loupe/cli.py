@@ -1,6 +1,7 @@
 """Loupe command line. Commands get added milestone by milestone (see CLAUDE.md)."""
 
 import sqlite3
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from typing import Annotated
@@ -11,7 +12,6 @@ from rich.table import Table
 
 from loupe import __version__
 from loupe.brand import BrandProfile
-from loupe.claude import StructuredClient
 from loupe.config import ConfigError, PillarConfig, load_pillar_config
 from loupe.doctor import CheckResult, run_doctor
 from loupe.index import IndexTotals, album_counts, connect, totals
@@ -26,7 +26,6 @@ from loupe.sheets import Tile
 from loupe.train import PillarModel
 from loupe.transcribe import Transcript
 from loupe.vectors import VectorStore
-from loupe.week import PlannedPost, PlannedWeek
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 console = Console()
@@ -466,32 +465,25 @@ def transcribe(limit: LimitOption = None) -> None:
         console.print(f"Skipped {count}: {reason}")
 
 
-def _original_path(settings: Settings, uuid: str) -> Path:
-    from loupe.library import LibraryNotFoundError, original_paths, resolve_library_path
+def _studio[T](action: Callable[[], T]) -> T:
+    from loupe.studio import StudioError
 
-    _require_owner_account(settings)
     try:
-        library_path = resolve_library_path(settings.photos_library)
-    except LibraryNotFoundError as error:
+        return action()
+    except StudioError as error:
         raise _fail(str(error)) from error
-    found = original_paths(library_path, [uuid]).get(uuid)
-    if found is None:
-        raise _fail(f"original for {uuid} is not on this Mac")
-    return found
+
+
+def _original_path(settings: Settings, uuid: str) -> Path:
+    from loupe.studio import original_path
+
+    return _studio(lambda: original_path(settings, uuid))
 
 
 def _take(connection: sqlite3.Connection, uuid: str) -> tuple[Transcript, float]:
-    from loupe.transcribe import load_transcript, talking_clips
+    from loupe.studio import take
 
-    if uuid not in talking_clips(connection):
-        raise _fail(f"{uuid} is not a transcribed talking clip. Run `loupe cut` to list them.")
-    transcript = load_transcript(connection, uuid)
-    row = connection.execute(
-        "SELECT duration_seconds FROM items WHERE uuid = ?", (uuid,)
-    ).fetchone()
-    if transcript is None or row is None or row[0] is None:
-        raise _fail(f"{uuid} has no transcript or duration")
-    return transcript, float(row[0])
+    return _studio(lambda: take(connection, uuid))
 
 
 @app.command()
@@ -534,37 +526,19 @@ def cut(
     console.print(f"Render: {target}")
 
 
-def _claude_client() -> StructuredClient:
-    from loupe.claude import AnthropicClient, ClaudeError
-
-    try:
-        return AnthropicClient()
-    except ImportError as error:
-        raise _fail("anthropic is not installed. Run `uv sync --extra secondpass`.") from error
-    except ClaudeError as error:
-        raise _fail(str(error)) from error
-
-
 @app.command()
 def hooks(
     uuid: Annotated[str, typer.Argument(help="Talking take, from `loupe cut`.")],
     fresh: Annotated[bool, typer.Option("--fresh", help="Ask Claude for new hooks.")] = False,
 ) -> None:
     """M10: six hook openings for one take, in her voice. Sends the transcript to Claude."""
-    from loupe.claude import ClaudeError
-    from loupe.hooks import hooks_for_take
+    from loupe.studio import claude_client, write_hooks
 
     settings = _load_settings()
     profile = _load_brand()
     connection = connect(settings.index_path)
     try:
-        transcript, _ = _take(connection, uuid)
-        try:
-            lines = hooks_for_take(
-                connection, uuid, profile, transcript, _claude_client(), fresh=fresh
-            )
-        except ClaudeError as error:
-            raise _fail(str(error)) from error
+        lines = _studio(lambda: write_hooks(connection, uuid, profile, claude_client, fresh))
     finally:
         connection.close()
     table = Table("#", "Hook")
@@ -583,37 +557,21 @@ def reel(
     ] = 30.0,
 ) -> None:
     """M10: render the cut take as a 9:16 reel with captions and an end card."""
-    from loupe.audio import AudioError
-    from loupe.cut import cut_path, plan_cut, remap_words, render_cut
-    from loupe.hooks import load_hooks
-    from loupe.reel import ReelSpec, reel_path, render_reel
+    from loupe.studio import make_reel, original_path
 
     settings = _load_settings()
     profile = _load_brand()
     connection = connect(settings.index_path)
     try:
-        transcript, seconds = _take(connection, uuid)
-        stored = load_hooks(connection, uuid)
+        target, seconds = _studio(
+            lambda: make_reel(
+                settings, connection, profile, uuid, hook, length,
+                lambda found: original_path(settings, found),
+            )
+        )  # fmt: skip
     finally:
         connection.close()
-    if stored is None:
-        raise _fail(f"no hooks for {uuid}. Run `loupe hooks {uuid}` first.")
-    plan = plan_cut(transcript, seconds)
-    renders = settings.data_dir / "renders"
-    cut_video = cut_path(renders, uuid)
-    spec = ReelSpec(
-        hook=stored[hook - 1],
-        body_seconds=min(length, plan.kept_seconds),
-        comment_word=profile.voice.comment_word,
-    )
-    target = reel_path(renders, uuid, hook)
-    try:
-        if not cut_video.is_file():
-            render_cut(_original_path(settings, uuid), cut_video, plan)
-        render_reel(cut_video, target, profile, spec, remap_words(transcript, plan))
-    except (AudioError, ValueError) as error:
-        raise _fail(f"reel failed for {uuid}: {error}") from error
-    console.print(f"Reel {spec.total_seconds:.1f}s with hook {hook}: {target}")
+    console.print(f"Reel {seconds:.1f}s with hook {hook}: {target}")
 
 
 def _week_tiles(connection: sqlite3.Connection, uuids: list[str]) -> list[Tile]:
@@ -627,16 +585,6 @@ def _week_tiles(connection: sqlite3.Connection, uuids: list[str]) -> list[Tile]:
     return tiles
 
 
-def _monday(value: str) -> date:
-    try:
-        parsed = date.fromisoformat(value)
-    except ValueError as error:
-        raise _fail("--start must be YYYY-MM-DD") from error
-    if parsed.weekday() != 0:
-        raise _fail("--start must be a Monday")
-    return parsed
-
-
 @app.command()
 def week(
     start: Annotated[
@@ -648,52 +596,19 @@ def week(
     """M11: plan Monday to Sunday with Claude and pick assets through search."""
     import webbrowser
 
-    from loupe.claude import ClaudeError
-    from loupe.encoder import SiglipEncoder
-    from loupe.search import SearchError, SearchFilters, search
     from loupe.sheets import Section, write_sheet
-    from loupe.train import pillar_members
-    from loupe.transcribe import talking_clips
-    from loupe.week import (
-        MEDIA_FOR_FORMAT,
-        load_week,
-        pillar_counts,
-        plan_week,
-        take_summaries,
-        week_start,
-    )
+    from loupe.studio import claude_client, parse_monday, plan_or_load_week, search_planner
+    from loupe.week import week_start
 
-    monday = _monday(start) if start else week_start(date.today())
+    monday = _studio(lambda: parse_monday(start)) if start else week_start(date.today())
     settings = _load_settings()
     config = _load_config()
     profile = _load_brand()
     _require_owner_account(settings)
+    planner = search_planner(settings, config, profile, claude_client)
     connection = connect(settings.index_path)
     try:
-        planned = None if fresh else load_week(connection, monday)
-        if planned is None:
-            encoder = SiglipEncoder()
-            store = _open_vectors(settings, encoder.model_id)
-
-            def find_assets(post: PlannedPost) -> list[str]:
-                filters = SearchFilters(
-                    pillar=post.pillar, media_type=MEDIA_FOR_FORMAT[post.format]
-                )
-                hits = search(connection, store, encoder, post.asset_query, filters, config)
-                return [hit.uuid for hit in hits]
-
-            try:
-                planned = plan_week(
-                    connection,
-                    monday,
-                    profile,
-                    pillar_counts(pillar_members(connection, config)),
-                    take_summaries(connection, talking_clips(connection)),
-                    _claude_client(),
-                    find_assets,
-                )
-            except (ClaudeError, SearchError) as error:
-                raise _fail(str(error)) from error
+        planned = _studio(lambda: plan_or_load_week(connection, monday, planner, fresh))
         sections = [
             Section(
                 f"{post.day} · {post.format.value.title()} · {post.pillar}",
@@ -727,35 +642,6 @@ StartOption = Annotated[
 ]
 
 
-def _planned_week(connection: sqlite3.Connection, start: str | None) -> PlannedWeek:
-    from loupe.week import latest_week, load_week
-
-    planned = load_week(connection, _monday(start)) if start else latest_week(connection)
-    if planned is None:
-        raise _fail("no week planned. Run `loupe week` first.")
-    return planned
-
-
-def _cover_preview(connection: sqlite3.Connection, planned: PlannedWeek, index: int) -> Path | None:
-    assets = planned.assets.get(index, [])
-    if not assets:
-        return None
-    row = connection.execute(
-        "SELECT preview_path FROM items WHERE uuid = ?", (assets[0],)
-    ).fetchone()
-    return Path(row[0]) if row and row[0] else None
-
-
-def _posts_with_covers(
-    connection: sqlite3.Connection, planned: PlannedWeek, post_format: str, day: str | None
-) -> list[tuple[PlannedPost, Path | None]]:
-    return [
-        (post, _cover_preview(connection, planned, index))
-        for index, post in enumerate(planned.plan.posts)
-        if post.format == post_format and (day is None or post.day == day.title())
-    ]
-
-
 @app.command()
 def carousel(
     start: StartOption = None,
@@ -763,20 +649,20 @@ def carousel(
 ) -> None:
     """M12: render the week's carousels as slide images. Writes to data/renders/."""
     from loupe.carousel import carousel_dir, render_carousel
+    from loupe.studio import planned_week, posts_with_covers, renders_dir
 
     settings = _load_settings()
     profile = _load_brand()
     connection = connect(settings.index_path)
     try:
-        planned = _planned_week(connection, start)
-        jobs = _posts_with_covers(connection, planned, "carousel", day)
+        planned = _studio(lambda: planned_week(connection, start))
+        jobs = posts_with_covers(connection, planned, "carousel", day)
     finally:
         connection.close()
     if not jobs:
         raise _fail("no carousel in that week or on that day")
-    renders = settings.data_dir / "renders"
     for post, preview in jobs:
-        target = carousel_dir(renders, planned.start.isoformat(), post.day)
+        target = carousel_dir(renders_dir(settings), planned.start.isoformat(), post.day)
         paths = render_carousel(profile, post.slides, preview, target)
         console.print(f"{post.day}: {len(paths)} slides in {target}")
 
@@ -787,39 +673,50 @@ def everything(
     fresh: Annotated[bool, typer.Option("--fresh", help="Ask Claude for a new email.")] = False,
 ) -> None:
     """M13: carousels, story frames and the week's email draft. Sends captions to Claude."""
-    from loupe.carousel import carousel_dir, render_carousel
-    from loupe.claude import ClaudeError
-    from loupe.newsletter import email_for_week, email_text
-    from loupe.story import render_story, story_dir
+    from loupe.studio import build_everything, claude_client, planned_week
 
     settings = _load_settings()
     profile = _load_brand()
     connection = connect(settings.index_path)
     try:
-        planned = _planned_week(connection, start)
-        carousels = _posts_with_covers(connection, planned, "carousel", None)
-        stories = _posts_with_covers(connection, planned, "story", None)
-        try:
-            draft = email_for_week(connection, planned, profile, _claude_client(), fresh)
-        except ClaudeError as error:
-            raise _fail(str(error)) from error
+        planned = _studio(lambda: planned_week(connection, start))
+        built = _studio(
+            lambda: build_everything(settings, connection, profile, planned, claude_client, fresh)
+        )
     finally:
         connection.close()
-    renders = settings.data_dir / "renders"
-    week_key = planned.start.isoformat()
     table = Table("Day", "Format", "Files", "Folder")
-    for post, preview in carousels:
-        target = carousel_dir(renders, week_key, post.day)
-        paths = render_carousel(profile, post.slides, preview, target)
-        table.add_row(post.day, "Carousel", str(len(paths)), str(target))
-    for post, preview in stories:
-        if not post.story_frames:
-            continue
-        target = story_dir(renders, week_key, post.day)
-        paths = render_story(profile, post.story_frames, preview, target)
-        table.add_row(post.day, "Story", str(len(paths)), str(target))
-    email_path = renders / "email" / f"{week_key}.txt"
-    email_path.parent.mkdir(parents=True, exist_ok=True)
-    email_path.write_text(email_text(draft), encoding="utf-8")
-    table.add_row("Mon", "Email", "1", str(email_path))
+    for rendered in built:
+        table.add_row(
+            rendered.day, rendered.format.title(), str(len(rendered.files)), str(rendered.folder)
+        )
     console.print(table)
+
+
+@app.command(name="app")
+def studio_app(
+    port: Annotated[int, typer.Option("--port", min=1024, max=65535)] = 8765,
+    open_page: Annotated[bool, typer.Option("--open", help="Open it in the browser.")] = False,
+) -> None:
+    """M14: the local app with Brand, Hooks, Week and Everything tabs, on 127.0.0.1."""
+    import webbrowser
+
+    from loupe.server import serve
+    from loupe.studio import Studio, claude_client, original_path, search_planner
+
+    settings = _load_settings()
+    config = _load_config()
+    profile = _load_brand()
+    _require_owner_account(settings)
+    studio = Studio(
+        settings=settings,
+        brand=profile,
+        client_factory=claude_client,
+        planner=search_planner(settings, config, profile, claude_client),
+        find_original=lambda uuid: original_path(settings, uuid),
+    )
+    url = f"http://127.0.0.1:{port}/"
+    console.print(f"Loupe app on {url}  (Ctrl+C to stop)")
+    if open_page:
+        webbrowser.open(url)
+    serve(studio, port)

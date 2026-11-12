@@ -16,6 +16,7 @@ writes the results back as albums that sync to the owner's phone.
 9. Plans the week with Claude and picks assets from the library.
 10. Renders carousel slides in the brand fonts and colours.
 11. Renders story frames and drafts the week's email with Claude.
+12. Serves a local app on 127.0.0.1 with Brand, Hooks, Week and Everything tabs.
 
 Photos are never edited or deleted. The only data sent off the machine is the owner's
 text, transcripts and downsized previews, to the Claude API, from `loupe hooks` on.
@@ -64,6 +65,7 @@ uv run loupe reel UUID --hook 2 --length 30
 uv run loupe week --open
 uv run loupe carousel --day Wed
 uv run loupe everything             # carousels, stories, email
+uv run loupe app --open             # local app on http://127.0.0.1:8765
 ```
 
 ## Configuration
@@ -87,4 +89,4 @@ uv run pytest
 
 ## Status
 
-`doctor` and M1 to M13 (scan through everything) built, tested on synthetic fixtures only. Claude calls use `claude-opus-5-5` with server-side refusal fallbacks on. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.
+`doctor` and M1 to M14 (scan through the local app) built, tested on synthetic fixtures only. Claude calls use `claude-opus-5-5` with server-side refusal fallbacks on. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.
