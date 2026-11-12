@@ -330,3 +330,58 @@ def write_albums(
         console.print(f"Added {added} items.")
     finally:
         connection.close()
+
+
+@app.command("search")
+def search_command(
+    query: Annotated[str, typer.Argument(help="What to look for, in plain words.")],
+    limit: Annotated[int, typer.Option("--limit", min=1, help="Results to return.")] = 60,
+    pillar: Annotated[str | None, typer.Option(help="Pillar album name.")] = None,
+    media: Annotated[str | None, typer.Option(help="photo or video.")] = None,
+    person: Annotated[str | None, typer.Option(help="Named person from Photos.")] = None,
+    light: Annotated[str | None, typer.Option(help="natural or artificial.")] = None,
+    shot: Annotated[str | None, typer.Option(help="close-up, medium, wide or selfie.")] = None,
+    setting: Annotated[str | None, typer.Option(help="indoor or outdoor.")] = None,
+    open_page: Annotated[bool, typer.Option("--open", help="Open the contact sheet.")] = False,
+) -> None:
+    """M6: search the image bank by text and open a contact sheet."""
+    import webbrowser
+
+    from loupe.encoder import SiglipEncoder
+    from loupe.search import Facet, SearchError, SearchFilters, search
+    from loupe.sheets import Section, Tile, slug, write_sheet
+
+    settings = _load_settings()
+    config = _load_config()
+    _require_owner_account(settings)
+    chosen = {Facet.LIGHT: light, Facet.SHOT: shot, Facet.SETTING: setting}
+    filters = SearchFilters(
+        pillar=pillar,
+        media_type=media,
+        person=person,
+        facets={facet: value for facet, value in chosen.items() if value is not None},
+    )
+    encoder = SiglipEncoder()
+    connection = connect(settings.index_path)
+    try:
+        store = _open_vectors(settings, encoder.model_id)
+        try:
+            hits = search(connection, store, encoder, query, filters, config, limit)
+        except SearchError as error:
+            raise _fail(str(error)) from error
+    finally:
+        connection.close()
+    for hit in hits:
+        typer.echo(hit.uuid)
+    search_dir = settings.data_dir / "search"
+    tiles = [Tile(hit.uuid, hit.preview_path, hit.media_type) for hit in hits]
+    sheet = write_sheet(
+        search_dir / f"{slug(query)}.html",
+        query or "All",
+        [Section("Results", tiles, len(tiles))],
+        settings.data_dir / "review" / "thumbs",
+        {"Results": len(hits)},
+    )
+    console.print(f"{len(hits)} results. Sheet: {sheet}")
+    if open_page:
+        webbrowser.open(sheet.resolve().as_uri())

@@ -1,6 +1,7 @@
 """Local HTML contact sheets. Thumbnails are downsized copies written under data/."""
 
 import html
+import os
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -47,6 +48,10 @@ def thumbnail(tile: Tile, thumbs_dir: Path) -> Path | None:
     return target
 
 
+def relative_src(target: Path, page_dir: Path) -> str:
+    return Path(os.path.relpath(target, page_dir)).as_posix()
+
+
 def _tile_html(tile: Tile, src: str) -> str:
     uuid = html.escape(tile.uuid)
     badge = '<span class="badge">Video</span>' if tile.media_type == "video" else ""
@@ -63,7 +68,7 @@ def _section_html(section: Section, page_dir: Path, thumbs_dir: Path) -> str:
     for tile in section.tiles:
         path = thumbnail(tile, thumbs_dir)
         if path is not None:
-            tiles.append(_tile_html(tile, path.relative_to(page_dir).as_posix()))
+            tiles.append(_tile_html(tile, relative_src(path, page_dir)))
     body = "".join(tiles) if tiles else '<p class="empty">Nothing here yet.</p>'
     shown = f"{len(tiles)} of {section.total}" if len(tiles) < section.total else str(section.total)
     return (

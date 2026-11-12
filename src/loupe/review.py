@@ -7,7 +7,7 @@ from pathlib import Path
 
 from loupe.classify import Pick, count_picks, picks
 from loupe.config import PillarConfig
-from loupe.sheets import Section, Tile, page, slug, thumbnail, write_sheet
+from loupe.sheets import Section, Tile, page, relative_src, slug, thumbnail, write_sheet
 
 CONFIDENT_SHOWN = 240
 BORDERLINE_SHOWN = 120
@@ -25,7 +25,7 @@ def _tiles(rows: list[Pick]) -> list[Tile]:
 
 
 def _cover(paths: list[Path], review_dir: Path) -> str:
-    images = "".join(f'<img src="{p.relative_to(review_dir).as_posix()}" alt="">' for p in paths)
+    images = "".join(f'<img src="{relative_src(p, review_dir)}" alt="">' for p in paths)
     return f'<div class="cover">{images}</div>'
 
 

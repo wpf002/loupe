@@ -72,4 +72,4 @@ uv run pytest
 
 ## Status
 
-`doctor`, M1 `scan` and M2 `embed` built, tested on synthetic fixtures only. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.
+`doctor` and M1 to M6 (scan, embed, train, classify, review, write-albums, search) built, tested on synthetic fixtures only. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.

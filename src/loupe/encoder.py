@@ -41,3 +41,9 @@ class SiglipEncoder:
         with self._torch.inference_mode():
             features = self.model.encode_image(pixels, normalize=True)
         return features.float().cpu().numpy()
+
+    def encode_texts(self, texts: Sequence[str]) -> np.ndarray:
+        tokens = self.tokenizer(list(texts)).to(self.device)
+        with self._torch.inference_mode():
+            features = self.model.encode_text(tokens, normalize=True)
+        return features.float().cpu().numpy()
