@@ -10,6 +10,7 @@ from rich.table import Table
 
 from loupe import __version__
 from loupe.brand import BrandProfile
+from loupe.claude import StructuredClient
 from loupe.config import ConfigError, PillarConfig, load_pillar_config
 from loupe.doctor import CheckResult, run_doctor
 from loupe.index import IndexTotals, album_counts, connect, totals
@@ -528,3 +529,85 @@ def cut(
         f"ranges, {plan.fillers_removed} fillers removed."
     )
     console.print(f"Render: {target}")
+
+
+def _claude_client() -> StructuredClient:
+    from loupe.claude import AnthropicClient, ClaudeError
+
+    try:
+        return AnthropicClient()
+    except ImportError as error:
+        raise _fail("anthropic is not installed. Run `uv sync --extra secondpass`.") from error
+    except ClaudeError as error:
+        raise _fail(str(error)) from error
+
+
+@app.command()
+def hooks(
+    uuid: Annotated[str, typer.Argument(help="Talking take, from `loupe cut`.")],
+    fresh: Annotated[bool, typer.Option("--fresh", help="Ask Claude for new hooks.")] = False,
+) -> None:
+    """M10: six hook openings for one take, in her voice. Sends the transcript to Claude."""
+    from loupe.claude import ClaudeError
+    from loupe.hooks import hooks_for_take
+
+    settings = _load_settings()
+    profile = _load_brand()
+    connection = connect(settings.index_path)
+    try:
+        transcript, _ = _take(connection, uuid)
+        try:
+            lines = hooks_for_take(
+                connection, uuid, profile, transcript, _claude_client(), fresh=fresh
+            )
+        except ClaudeError as error:
+            raise _fail(str(error)) from error
+    finally:
+        connection.close()
+    table = Table("#", "Hook")
+    for number, line in enumerate(lines, start=1):
+        table.add_row(str(number), line)
+    console.print(table)
+    console.print(f"Render one with `loupe reel {uuid} --hook N`.")
+
+
+@app.command()
+def reel(
+    uuid: Annotated[str, typer.Argument(help="Take with hooks, from `loupe hooks`.")],
+    hook: Annotated[int, typer.Option("--hook", min=1, max=6, help="Hook number.")] = 1,
+    length: Annotated[
+        float, typer.Option("--length", min=5.0, max=90.0, help="Seconds before the end card.")
+    ] = 30.0,
+) -> None:
+    """M10: render the cut take as a 9:16 reel with captions and an end card."""
+    from loupe.audio import AudioError
+    from loupe.cut import cut_path, plan_cut, remap_words, render_cut
+    from loupe.hooks import load_hooks
+    from loupe.reel import ReelSpec, reel_path, render_reel
+
+    settings = _load_settings()
+    profile = _load_brand()
+    connection = connect(settings.index_path)
+    try:
+        transcript, seconds = _take(connection, uuid)
+        stored = load_hooks(connection, uuid)
+    finally:
+        connection.close()
+    if stored is None:
+        raise _fail(f"no hooks for {uuid}. Run `loupe hooks {uuid}` first.")
+    plan = plan_cut(transcript, seconds)
+    renders = settings.data_dir / "renders"
+    cut_video = cut_path(renders, uuid)
+    spec = ReelSpec(
+        hook=stored[hook - 1],
+        body_seconds=min(length, plan.kept_seconds),
+        comment_word=profile.voice.comment_word,
+    )
+    target = reel_path(renders, uuid, hook)
+    try:
+        if not cut_video.is_file():
+            render_cut(_original_path(settings, uuid), cut_video, plan)
+        render_reel(cut_video, target, profile, spec, remap_words(transcript, plan))
+    except (AudioError, ValueError) as error:
+        raise _fail(f"reel failed for {uuid}: {error}") from error
+    console.print(f"Reel {spec.total_seconds:.1f}s with hook {hook}: {target}")

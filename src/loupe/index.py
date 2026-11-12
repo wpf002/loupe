@@ -94,6 +94,14 @@ MIGRATIONS: tuple[str, ...] = (
         reason TEXT NOT NULL
     );
     """,
+    """
+    CREATE TABLE hooks (
+        uuid TEXT PRIMARY KEY REFERENCES items(uuid) ON DELETE CASCADE,
+        model TEXT NOT NULL,
+        hooks_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    """,
 )
 
 

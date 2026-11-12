@@ -11,8 +11,11 @@ writes the results back as albums that sync to the owner's phone.
 4. Classifies the rest and builds a review page.
 5. Adds confident picks to albums in a `Loupe` folder in Photos.
 6. Searches the library by plain-text description.
+7. Transcribes talking clips, cuts dead air, and renders captioned reels.
+8. Writes hooks with Claude in the owner's voice.
 
-Nothing leaves the machine. Photos are never edited or deleted.
+Photos are never edited or deleted. The only data sent off the machine is the owner's
+text, transcripts and downsized previews, to the Claude API, from `loupe hooks` on.
 
 ## Requirements
 
@@ -49,6 +52,12 @@ uv run loupe review
 uv run loupe write-albums            # dry run
 uv run loupe write-albums --apply
 uv run loupe search "laughing on a rooftop at sunset"
+uv run loupe brand --open            # needs config/brand.toml
+uv run loupe transcribe              # needs `uv sync --extra transcribe`
+uv run loupe cut                     # lists talking takes
+uv run loupe cut UUID
+uv run loupe hooks UUID              # needs ANTHROPIC_API_KEY in .env
+uv run loupe reel UUID --hook 2 --length 30
 ```
 
 ## Configuration
@@ -72,4 +81,4 @@ uv run pytest
 
 ## Status
 
-`doctor` and M1 to M6 (scan, embed, train, classify, review, write-albums, search) built, tested on synthetic fixtures only. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.
+`doctor` and M1 to M10 (scan through hooks and reel) built, tested on synthetic fixtures only. Claude calls use `claude-opus-5-5` with server-side refusal fallbacks on. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.
