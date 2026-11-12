@@ -17,6 +17,7 @@ from loupe.settings import (
     load_settings,
     owner_account_problem,
 )
+from loupe.vectors import VectorStore
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 console = Console()
@@ -182,3 +183,55 @@ def embed(limit: LimitOption = None) -> None:
         console.print(f"{result.seconds:.1f}s, {result.per_second:.1f} items/sec")
     finally:
         connection.close()
+
+
+def _open_vectors(settings: Settings, model_id: str) -> VectorStore:
+    from loupe.embed import vector_path
+    from loupe.vectors import VectorStoreError
+
+    try:
+        return VectorStore(vector_path(settings.data_dir, model_id))
+    except VectorStoreError as error:
+        raise _fail(str(error)) from error
+
+
+@app.command()
+def train(limit: LimitOption = None) -> None:
+    """M3: fit the pillar classifier on her labeled albums and score a held-out split."""
+    from loupe.encoder import MODEL_ID
+    from loupe.train import TrainingError, load_training_set, model_path, save_model, train_pillars
+
+    settings = _load_settings()
+    config = _load_config()
+    _require_owner_account(settings)
+    connection = connect(settings.index_path)
+    try:
+        store = _open_vectors(settings, MODEL_ID)
+        training_set = load_training_set(connection, store, config, MODEL_ID, limit)
+        try:
+            result = train_pillars(training_set, config, MODEL_ID)
+        except TrainingError as error:
+            raise _fail(str(error)) from error
+        save_model(result.model, model_path(settings.data_dir))
+    finally:
+        connection.close()
+    table = Table("Pillar", "Train", "Held Out", "Precision", "Recall")
+    for score in result.scores:
+        table.add_row(
+            score.pillar,
+            str(score.train_examples),
+            str(score.test_examples),
+            f"{score.precision:.2f}",
+            f"{score.recall:.2f}",
+        )
+    console.print(table)
+    console.print(
+        f"Scored at min_confidence {config.min_confidence:.2f}. "
+        f"{result.background} unlabeled items used as background."
+    )
+    if result.too_small:
+        small = Table("Too Few Examples", "Count")
+        for pillar, count in result.too_small.items():
+            small.add_row(pillar, str(count))
+        console.print(small)
+        console.print(f"Need {config.min_examples_per_pillar} per pillar.")

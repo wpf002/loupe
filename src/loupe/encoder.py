@@ -10,6 +10,7 @@ MODEL_NAME = "ViT-SO400M-16-SigLIP2-384"
 PRETRAINED = "webli"
 DEVICE = "mps"
 PRECISION = "fp16"
+MODEL_ID = f"{MODEL_NAME}/{PRETRAINED}"
 
 
 class SiglipEncoder:
@@ -19,7 +20,7 @@ class SiglipEncoder:
 
         self._torch = torch
         self.device = device
-        self.model_id = f"{MODEL_NAME}/{PRETRAINED}"
+        self.model_id = MODEL_ID
         self.model, _, self._preprocess = open_clip.create_model_and_transforms(
             MODEL_NAME, pretrained=PRETRAINED, device=device, precision=PRECISION
         )

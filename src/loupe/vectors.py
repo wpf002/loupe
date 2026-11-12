@@ -16,18 +16,23 @@ class VectorStoreError(Exception):
 class VectorStore:
     """A growable (capacity, dim) float16 .npy memmap. Unused rows are zeros."""
 
-    def __init__(self, path: Path, dim: int) -> None:
+    def __init__(self, path: Path, dim: int | None = None) -> None:
+        """dim None opens an existing file at whatever width it holds."""
         self.path = path
-        self.dim = dim
-        path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             self._array = np.lib.format.open_memmap(path, mode="r+")
+            dim = self._array.shape[1] if dim is None else dim
+            self.dim = dim
             if self._array.dtype != VECTOR_DTYPE or self._array.shape[1] != dim:
                 raise VectorStoreError(
                     f"{path.name} holds {self._array.shape[1]}-d {self._array.dtype} vectors, "
                     f"expected {dim}-d {np.dtype(VECTOR_DTYPE)}."
                 )
+        elif dim is None:
+            raise VectorStoreError(f"{path.name} does not exist. Run `loupe embed` first.")
         else:
+            self.dim = dim
+            path.parent.mkdir(parents=True, exist_ok=True)
             self._array = self._create(path, MIN_CAPACITY)
 
     def _create(self, path: Path, capacity: int) -> np.memmap:
