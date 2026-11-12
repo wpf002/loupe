@@ -290,3 +290,43 @@ def review(
     console.print(f"Wrote {len(pages.pillars)} pillar sheets. Index: {pages.index}")
     if open_page:
         webbrowser.open(pages.index.resolve().as_uri())
+
+
+@app.command("write-albums")
+def write_albums(
+    limit: LimitOption = None,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Write to Photos. Default is a dry run.")
+    ] = False,
+) -> None:
+    """M5: add confident picks to albums in the Loupe folder. Dry run unless --apply."""
+    from loupe.albums import PhotoscriptWriter, apply_plans, plan_albums
+
+    settings = _load_settings()
+    config = _load_config()
+    _require_owner_account(settings)
+    model = _load_model(settings)
+    connection = connect(settings.index_path)
+    try:
+        plans = plan_albums(connection, model.pillars, config, limit)
+        table = Table("Album", "Pillar", "Confident", "Already Added", "To Add")
+        for plan in plans:
+            table.add_row(
+                f"{settings.album_folder} / {plan.album}",
+                plan.pillar,
+                str(plan.picks),
+                str(plan.already_written),
+                str(len(plan.to_add)),
+            )
+        console.print(table)
+        if not apply:
+            console.print("Dry run. Nothing was written. Pass --apply to write.")
+            return
+        writer = PhotoscriptWriter(settings.album_folder)
+        added = 0
+        for album, count in apply_plans(connection, plans, writer):
+            added += count
+            console.print(f"{album}: +{count}")
+        console.print(f"Added {added} items.")
+    finally:
+        connection.close()

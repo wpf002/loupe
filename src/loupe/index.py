@@ -70,6 +70,14 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX pillar_scores_by_pillar ON pillar_scores(pillar, probability DESC);
     """,
+    """
+    CREATE TABLE album_writes (
+        album TEXT NOT NULL,
+        uuid TEXT NOT NULL,
+        written_at TEXT NOT NULL,
+        PRIMARY KEY (album, uuid)
+    );
+    """,
 )
 
 
