@@ -13,6 +13,7 @@ writes the results back as albums that sync to the owner's phone.
 6. Searches the library by plain-text description.
 7. Transcribes talking clips, cuts dead air, and renders captioned reels.
 8. Writes hooks with Claude in the owner's voice.
+9. Plans the week with Claude and picks assets from the library.
 
 Photos are never edited or deleted. The only data sent off the machine is the owner's
 text, transcripts and downsized previews, to the Claude API, from `loupe hooks` on.
@@ -58,6 +59,7 @@ uv run loupe cut                     # lists talking takes
 uv run loupe cut UUID
 uv run loupe hooks UUID              # needs ANTHROPIC_API_KEY in .env
 uv run loupe reel UUID --hook 2 --length 30
+uv run loupe week --open
 ```
 
 ## Configuration
@@ -81,4 +83,4 @@ uv run pytest
 
 ## Status
 
-`doctor` and M1 to M10 (scan through hooks and reel) built, tested on synthetic fixtures only. Claude calls use `claude-opus-5-5` with server-side refusal fallbacks on. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.
+`doctor` and M1 to M11 (scan through week) built, tested on synthetic fixtures only. Claude calls use `claude-opus-5-5` with server-side refusal fallbacks on. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.

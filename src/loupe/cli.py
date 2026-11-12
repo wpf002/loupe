@@ -21,6 +21,7 @@ from loupe.settings import (
     load_settings,
     owner_account_problem,
 )
+from loupe.sheets import Tile
 from loupe.train import PillarModel
 from loupe.transcribe import Transcript
 from loupe.vectors import VectorStore
@@ -611,3 +612,106 @@ def reel(
     except (AudioError, ValueError) as error:
         raise _fail(f"reel failed for {uuid}: {error}") from error
     console.print(f"Reel {spec.total_seconds:.1f}s with hook {hook}: {target}")
+
+
+def _week_tiles(connection: sqlite3.Connection, uuids: list[str]) -> list[Tile]:
+    tiles = []
+    for uuid in uuids:
+        row = connection.execute(
+            "SELECT preview_path, media_type FROM items WHERE uuid = ?", (uuid,)
+        ).fetchone()
+        if row is not None:
+            tiles.append(Tile(uuid, row[0], row[1]))
+    return tiles
+
+
+@app.command()
+def week(
+    start: Annotated[
+        str | None, typer.Option("--start", help="Monday to plan, YYYY-MM-DD. Default: next.")
+    ] = None,
+    fresh: Annotated[bool, typer.Option("--fresh", help="Ask Claude for a new plan.")] = False,
+    open_page: Annotated[bool, typer.Option("--open", help="Open the week sheet.")] = False,
+) -> None:
+    """M11: plan Monday to Sunday with Claude and pick assets through search."""
+    import webbrowser
+    from datetime import date
+
+    from loupe.claude import ClaudeError
+    from loupe.encoder import SiglipEncoder
+    from loupe.search import SearchError, SearchFilters, search
+    from loupe.sheets import Section, write_sheet
+    from loupe.train import pillar_members
+    from loupe.transcribe import talking_clips
+    from loupe.week import (
+        MEDIA_FOR_FORMAT,
+        PlannedPost,
+        load_week,
+        pillar_counts,
+        plan_week,
+        take_summaries,
+        week_start,
+    )
+
+    try:
+        monday = date.fromisoformat(start) if start else week_start(date.today())
+    except ValueError as error:
+        raise _fail("--start must be YYYY-MM-DD") from error
+    if monday.weekday() != 0:
+        raise _fail("--start must be a Monday")
+    settings = _load_settings()
+    config = _load_config()
+    profile = _load_brand()
+    _require_owner_account(settings)
+    connection = connect(settings.index_path)
+    try:
+        planned = None if fresh else load_week(connection, monday)
+        if planned is None:
+            encoder = SiglipEncoder()
+            store = _open_vectors(settings, encoder.model_id)
+
+            def find_assets(post: PlannedPost) -> list[str]:
+                filters = SearchFilters(
+                    pillar=post.pillar, media_type=MEDIA_FOR_FORMAT[post.format]
+                )
+                hits = search(connection, store, encoder, post.asset_query, filters, config)
+                return [hit.uuid for hit in hits]
+
+            try:
+                planned = plan_week(
+                    connection,
+                    monday,
+                    profile,
+                    pillar_counts(pillar_members(connection, config)),
+                    take_summaries(connection, talking_clips(connection)),
+                    _claude_client(),
+                    find_assets,
+                )
+            except (ClaudeError, SearchError) as error:
+                raise _fail(str(error)) from error
+        sections = [
+            Section(
+                f"{post.day} · {post.format.value.title()} · {post.pillar}",
+                _week_tiles(connection, planned.assets.get(index, [])),
+                len(planned.assets.get(index, [])),
+            )
+            for index, post in enumerate(planned.plan.posts)
+        ]
+    finally:
+        connection.close()
+    table = Table("Day", "Format", "Pillar", "Angle", "Assets")
+    for index, post in enumerate(planned.plan.posts):
+        table.add_row(
+            post.day, post.format.value, post.pillar, post.angle,
+            str(len(planned.assets.get(index, []))),
+        )  # fmt: skip
+    console.print(table)
+    sheet = write_sheet(
+        settings.data_dir / "week" / f"{monday.isoformat()}.html",
+        f"Week of {monday.strftime('%b %-d')}",
+        sections,
+        settings.data_dir / "review" / "thumbs",
+    )
+    console.print(f"Sheet: {sheet}")
+    if open_page:
+        webbrowser.open(sheet.resolve().as_uri())

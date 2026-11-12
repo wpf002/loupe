@@ -102,6 +102,15 @@ MIGRATIONS: tuple[str, ...] = (
         created_at TEXT NOT NULL
     );
     """,
+    """
+    CREATE TABLE weeks (
+        week_start TEXT PRIMARY KEY,
+        model TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        assets_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    """,
 )
 
 
