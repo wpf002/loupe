@@ -314,20 +314,158 @@ function wireTabs() {
     location.hash = `#${next}`;
     document.getElementById(`tab-${next}`).focus();
   });
-  window.addEventListener("hashchange", () => show(location.hash.slice(1)));
+  window.addEventListener("hashchange", () => {
+    if (!list.hidden) show(location.hash.slice(1));
+  });
 }
 
-async function loadState() {
+async function loadState(setup) {
+  const who = document.getElementById("who");
   try {
     const state = await api("GET", "/api/state");
     const parts = [state.brand, `${state.takes} Takes`];
     if (state.week) parts.push(`Week of ${weekLabel(state.week)}`);
-    document.getElementById("who").textContent = parts.join(" · ");
+    who.replaceChildren(h("span", { text: parts.join(" · ") }));
   } catch (error) {
-    document.getElementById("who").textContent = "Offline";
+    who.replaceChildren(h("span", { text: "Offline" }));
+  }
+  if (setup.mode === "app" && setup.account) {
+    who.append(h("span", { text: setup.account.email }), button("Sign Out", signOut));
   }
 }
 
-wireTabs();
-loadState();
-show(location.hash.slice(1));
+async function signOut(event) {
+  event.currentTarget.disabled = true;
+  try {
+    await api("POST", "/api/setup/sign-out");
+  } catch (error) {
+    toast(error.message);
+  }
+  location.reload();
+}
+
+/* Setup: Loupe.app first run. Account, then Photos, then Library. */
+const SCAN_POLL_MS = 1000;
+const BLOCKED_ACCESS = ["denied", "restricted"];
+
+function count(value) {
+  return Number(value).toLocaleString("en-US");
+}
+
+function step(number, title, state, status, ...body) {
+  return h("li", { class: "card step", "data-state": state, "aria-current": state === "active" ? "step" : null },
+    h("div", { class: "row" },
+      h("span", { class: "number", "aria-hidden": "true", text: state === "done" ? "✓" : String(number) }),
+      h("h2", { text: title }),
+      status ? h("span", { class: "status", text: status }) : null),
+    state === "active" ? body : null);
+}
+
+function field(label, attrs) {
+  const id = `field-${attrs.name}`;
+  return h("div", { class: "field" },
+    h("label", { class: "label", for: id, text: label }),
+    h("input", { id, required: true, ...attrs }));
+}
+
+/* Runs one setup step. Redraws with the new summary, or shows the error in that step. */
+async function setupStep(control, path, body) {
+  const card = control.closest(".step");
+  const summary = await busy(control, card, () => api("POST", `/api/setup/${path}`, body));
+  if (summary) drawSetup(summary);
+}
+
+function accountStep(setup) {
+  if (setup.account) return step(1, "Account", "done", setup.account.email);
+  const form = h("form", {},
+    field("Email", { name: "email", type: "email", autocomplete: "username", maxlength: "320" }),
+    field("Password", { name: "password", type: "password", autocomplete: "current-password", maxlength: "1024" }),
+    h("div", { class: "actions" },
+      h("button", { class: "button primary", type: "submit", value: "sign-in" }, "Sign In"),
+      h("button", { class: "button", type: "submit", value: "create-account" }, "Create Account")));
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const control = event.submitter;
+    const values = Object.fromEntries(new FormData(form));
+    setupStep(control, control.value, { email: values.email, password: values.password });
+  });
+  return step(1, "Account", "active", null, form);
+}
+
+function photosStep(setup) {
+  if (!setup.account) return step(2, "Photos", "waiting", null);
+  if (setup.photos.ready) {
+    return step(2, "Photos", "done", setup.photos.access === "limited" ? "Selected Photos" : "Connected");
+  }
+  const actions = h("div", { class: "actions" });
+  if (BLOCKED_ACCESS.includes(setup.photos.access)) {
+    actions.append(
+      button("Open Settings", (event) => setupStep(event.currentTarget, "photos-settings"), true),
+      button("Check Again", (event) => setupStep(event.currentTarget, "photos")));
+    return step(2, "Photos", "active", "Access Off", actions);
+  }
+  actions.append(button("Connect Photos", (event) => setupStep(event.currentTarget, "photos"), true));
+  return step(2, "Photos", "active", null, actions);
+}
+
+function libraryStep(setup) {
+  const scan = setup.library.scan;
+  if (!setup.photos.ready) return step(3, "Library", "waiting", null);
+  if (scan.state === "running") {
+    return step(3, "Library", "active", `${count(scan.seen)} Scanned`,
+      h("div", { class: "meter", role: "progressbar", "aria-label": "Scanning" }, h("span")));
+  }
+  if (setup.library.items > 0) return step(3, "Library", "done", `${count(setup.library.items)} Items`);
+  const label = scan.state === "failed" ? "Scan Again" : "Scan Library";
+  return step(3, "Library", "active", null,
+    scan.error ? alertBox(scan.error) : null,
+    h("div", { class: "actions" }, button(label, (event) => setupStep(event.currentTarget, "scan"), true)));
+}
+
+function drawSetup(setup) {
+  if (setup.ready) {
+    enterStudio(setup);
+    return;
+  }
+  const panel = document.getElementById("setup");
+  const focused = document.activeElement?.name;
+  panel.replaceChildren(
+    h("h1", { id: "setup-title", text: "Set Up Loupe" }),
+    h("ol", { class: "steps" }, accountStep(setup), photosStep(setup), libraryStep(setup)));
+  panel.hidden = false;
+  if (focused) panel.querySelector(`[name="${focused}"]`)?.focus();
+  else panel.querySelector('[aria-current="step"] input, [aria-current="step"] .button')?.focus();
+  clearTimeout(drawSetup.timer);
+  if (setup.library.scan.state === "running") drawSetup.timer = setTimeout(pollSetup, SCAN_POLL_MS);
+}
+
+async function pollSetup() {
+  try {
+    drawSetup(await api("GET", "/api/setup"));
+  } catch (error) {
+    document.getElementById("setup").prepend(alertBox(error.message));
+  }
+}
+
+function enterStudio(setup) {
+  document.getElementById("setup").hidden = true;
+  document.querySelector(".tabs").hidden = false;
+  loadState(setup);
+  show(location.hash.slice(1));
+}
+
+async function boot() {
+  wireTabs();
+  let setup;
+  try {
+    setup = await api("GET", "/api/setup");
+  } catch (error) {
+    const panel = document.getElementById("setup");
+    panel.replaceChildren(alertBox(error.message));
+    panel.hidden = false;
+    return;
+  }
+  drawSetup(setup);
+}
+
+boot();

@@ -12,7 +12,7 @@
 <body>
   <header class="bar">
     <a class="mark" href="#brand" aria-label="Loupe"><span class="lens" aria-hidden="true"></span>Loupe</a>
-    <nav class="tabs" role="tablist" aria-label="Sections">
+    <nav class="tabs" role="tablist" aria-label="Sections" hidden>
       <button role="tab" id="tab-brand" aria-controls="brand" data-tab="brand">Brand</button>
       <button role="tab" id="tab-hooks" aria-controls="hooks" data-tab="hooks">Hooks</button>
       <button role="tab" id="tab-week" aria-controls="week" data-tab="week">Week</button>
@@ -22,6 +22,7 @@
   </header>
 
   <main>
+    <section class="setup" id="setup" aria-labelledby="setup-title" hidden></section>
     <section class="panel" id="brand" role="tabpanel" aria-labelledby="tab-brand" hidden></section>
     <section class="panel" id="hooks" role="tabpanel" aria-labelledby="tab-hooks" hidden></section>
     <section class="panel" id="week" role="tabpanel" aria-labelledby="tab-week" hidden></section>

@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 
 from loupe.brand import BrandProfile
-from loupe.claude import ClaudeError, StructuredClient
+from loupe.claude import ClaudeError, ProxyAuth, StructuredClient
 from loupe.config import PillarConfig
 from loupe.settings import Settings, current_macos_user, owner_account_problem
 from loupe.transcribe import Transcript
@@ -108,11 +108,12 @@ def original_path(settings: Settings, uuid: str) -> Path:
     return found
 
 
-def claude_client() -> StructuredClient:
+def claude_client(proxy: ProxyAuth | None = None) -> StructuredClient:
+    """The CLI calls Claude with its own key; Loupe.app passes a proxy to the Loupe server."""
     from loupe.claude import AnthropicClient
 
     try:
-        return AnthropicClient()
+        return AnthropicClient(proxy)
     except ImportError as error:
         message = "anthropic is not installed. Run `uv sync --extra secondpass`."
         raise StudioError(message) from error

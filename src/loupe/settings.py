@@ -24,11 +24,24 @@ class Settings(BaseModel):
     photos_library: Path | None
     album_folder: str
     owner_macos_user: str | None
+    server_url: str | None = None
 
     @field_validator("album_folder")
     @classmethod
     def _album_folder_is_valid(cls, value: str) -> str:
         return validate_album_name(value)
+
+    @field_validator("server_url")
+    @classmethod
+    def _server_url_is_valid(cls, value: str | None) -> str | None:
+        from loupe.account import AccountError, validate_server_url
+
+        if value is None:
+            return None
+        try:
+            return validate_server_url(value)
+        except AccountError as error:
+            raise ValueError(str(error)) from error
 
     @property
     def index_path(self) -> Path:
@@ -50,6 +63,7 @@ def load_settings(env_file: Path = DEFAULT_ENV_FILE) -> Settings:
             photos_library=Path(library).expanduser() if library else None,
             album_folder=os.environ.get("LOUPE_ALBUM_FOLDER") or DEFAULT_ALBUM_FOLDER,
             owner_macos_user=_blank_to_none(os.environ.get("LOUPE_OWNER_MACOS_USER")),
+            server_url=_blank_to_none(os.environ.get("LOUPE_SERVER_URL")),
         )
     except ValidationError as error:
         raise SettingsError(f"Invalid .env value: {error}") from error

@@ -1,5 +1,8 @@
 """M14: the local app. Serves the Brand, Hooks, Week and Everything tabs on 127.0.0.1.
 
+In Loupe.app (M15) an Onboarding is attached: until the user has signed in, granted
+Photos access and scanned, only the page, static files and /api/setup are served.
+
 Guards: bound to loopback only, Host header must name this server (stops DNS rebinding),
 every POST needs the per-process token from the page plus a JSON body under the size cap,
 UUIDs are checked by pattern, thumbnails are served for eligible items only, and render
@@ -23,6 +26,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from loupe.index import connect, is_eligible
+from loupe.onboarding import Onboarding, SetupError
 from loupe.studio import (
     Studio,
     StudioError,
@@ -63,6 +67,9 @@ SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
     "Cache-Control": "no-store",
 }
+MAX_EMAIL_LENGTH = 320
+MAX_PASSWORD_LENGTH = 1024
+OPEN_PATHS = frozenset({"/", "/api/setup", "/fonts/display", "/fonts/body"})
 MIN_REEL_SECONDS = 5.0
 MAX_REEL_SECONDS = 90.0
 
@@ -94,13 +101,26 @@ class App:
     studio: Studio
     token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     busy: threading.Lock = field(default_factory=threading.Lock)
+    onboarding: Onboarding | None = None
+
+    def _require_setup(self, path: str) -> None:
+        """In Loupe.app nothing past setup is served until sign-in, Photos and a scan are done."""
+        if self.onboarding is None or path in OPEN_PATHS or path.startswith("/static/"):
+            return
+        if path.startswith("/api/setup/"):
+            return
+        if not self.onboarding.ready():
+            raise HttpError(HTTPStatus.FORBIDDEN, "Finish setup first")
 
     def connection(self) -> sqlite3.Connection:
         return connect(self.studio.settings.index_path)
 
     def get(self, path: str, query: dict[str, list[str]]) -> Reply:
+        self._require_setup(path)
         if path == "/":
             return self.index_page()
+        if path == "/api/setup":
+            return self.setup()
         if path.startswith("/static/"):
             return self.static_file(path.removeprefix("/static/"))
         if path in ("/fonts/display", "/fonts/body"):
@@ -129,6 +149,9 @@ class App:
         raise HttpError(HTTPStatus.NOT_FOUND, "Not found")
 
     def post(self, path: str, body: Json) -> Json:
+        self._require_setup(path)
+        if path.startswith("/api/setup/"):
+            return self.setup_step(path.removeprefix("/api/setup/"), body)
         if not self.busy.acquire(blocking=False):
             raise HttpError(HTTPStatus.CONFLICT, "Another job is running")
         try:
@@ -144,6 +167,35 @@ class App:
             raise HttpError(HTTPStatus.NOT_FOUND, "Not found")
         finally:
             self.busy.release()
+
+    def setup(self) -> Json:
+        if self.onboarding is None:
+            return {"mode": "cli", "ready": True}
+        return self._setup_call(self.onboarding.summary)
+
+    def setup_step(self, step: str, body: Json) -> Json:
+        onboarding = self.onboarding
+        if onboarding is None:
+            raise HttpError(HTTPStatus.NOT_FOUND, "Not found")
+        steps: dict[str, Callable[[], object]] = {
+            "sign-in": lambda: onboarding.sign_in(*_credentials(body)),
+            "create-account": lambda: onboarding.create_account(*_credentials(body)),
+            "sign-out": onboarding.sign_out,
+            "photos": onboarding.connect_photos,
+            "photos-settings": onboarding.open_photos_settings,
+            "scan": lambda: onboarding.start_scan(_optional_limit(body)),
+        }
+        if step not in steps:
+            raise HttpError(HTTPStatus.NOT_FOUND, "Not found")
+        self._setup_call(steps[step])
+        return self._setup_call(onboarding.summary)
+
+    @staticmethod
+    def _setup_call[T](action: Callable[[], T]) -> T:
+        try:
+            return action()
+        except SetupError as error:
+            raise HttpError(error.status, str(error)) from error
 
     def index_page(self) -> str:
         template = files("loupe.web").joinpath("app.html").read_text(encoding="utf-8")
@@ -383,6 +435,25 @@ def _first(query: dict[str, list[str]], key: str) -> str | None:
     return values[0] if values else None
 
 
+def _credentials(body: Json) -> tuple[str, str]:
+    email = body.get("email")
+    password = body.get("password")
+    if not isinstance(email, str) or not 3 <= len(email.strip()) <= MAX_EMAIL_LENGTH:
+        raise HttpError(HTTPStatus.BAD_REQUEST, "Enter an email")
+    if not isinstance(password, str) or not 1 <= len(password) <= MAX_PASSWORD_LENGTH:
+        raise HttpError(HTTPStatus.BAD_REQUEST, "Enter a password")
+    return email.strip(), password
+
+
+def _optional_limit(body: Json) -> int | None:
+    limit = body.get("limit")
+    if limit is None:
+        return None
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise HttpError(HTTPStatus.BAD_REQUEST, "limit must be a positive whole number")
+    return limit
+
+
 def _optional_str(body: Json, key: str) -> str | None:
     value = body.get(key)
     if value is None or isinstance(value, str):
@@ -537,9 +608,9 @@ def make_server(app: App, port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
     return server
 
 
-def serve(studio: Studio, port: int = DEFAULT_PORT) -> None:
+def serve(studio: Studio, port: int = DEFAULT_PORT, onboarding: Onboarding | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    server = make_server(App(studio), port)
+    server = make_server(App(studio, onboarding=onboarding), port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
