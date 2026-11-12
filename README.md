@@ -68,6 +68,19 @@ uv run loupe everything             # carousels, stories, email
 uv run loupe app --open             # local app on http://127.0.0.1:8765
 ```
 
+## Mac App
+
+```bash
+./scripts/build_app.sh               # needs LOUPE_SERVER_URL in .env
+open build/Loupe.app
+```
+
+First run: sign in or create a Loupe account, Connect Photos, Scan. Data and config
+live in `~/Library/Application Support/Loupe/` (`data/`, `config/brand.toml`,
+`config/pillars.toml`). This build runs this checkout's `.venv`, so it only works on
+the Mac that built it. Giving it to another Mac needs a Developer ID build with
+Python embedded.
+
 ## Configuration
 
 - `config/pillars.toml`: which albums count as pillars, confidence thresholds.
@@ -89,4 +102,4 @@ uv run pytest
 
 ## Status
 
-`doctor` and M1 to M14 (scan through the local app) built, tested on synthetic fixtures only. Claude calls use `claude-opus-5-5` with server-side refusal fallbacks on. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.
+`doctor` and M1 to M14 (scan through the local app) built, plus M15 (server, PhotoKit, sign-in and setup flow, Loupe.app launcher), tested on synthetic fixtures only. Claude calls use `claude-opus-5-5` with server-side refusal fallbacks on. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.

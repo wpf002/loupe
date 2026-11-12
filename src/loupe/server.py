@@ -124,11 +124,8 @@ class App:
         if path.startswith("/static/"):
             return self.static_file(path.removeprefix("/static/"))
         if path in ("/fonts/display", "/fonts/body"):
-            font = (
-                self.studio.brand.fonts.display
-                if path.endswith("display")
-                else self.studio.brand.fonts.body
-            )
+            fonts = self.studio.profile().fonts
+            font = fonts.display if path.endswith("display") else fonts.body
             return FileReply(font, FONT_TYPES[font.suffix.lower()])
         if path.startswith("/media/thumb/"):
             return self.thumb(_uuid(path.removeprefix("/media/thumb/")))
@@ -240,14 +237,14 @@ class App:
             planned = latest_week(connection)
             takes = len(take_list(connection))
         return {
-            "brand": self.studio.brand.name,
+            "brand": self.studio.brand.name if self.studio.brand else None,
             "takes": takes,
             "week": planned.start.isoformat() if planned else None,
             "busy": self.busy.locked(),
         }
 
     def brand(self) -> Json:
-        profile = self.studio.brand
+        profile = self.studio.profile()
         return {
             "name": profile.name,
             "colors": profile.colors.model_dump(),
@@ -295,7 +292,7 @@ class App:
     def new_hooks(self, uuid: str, fresh: bool) -> Json:
         with _closing(self.connection()) as connection:
             lines = write_hooks(
-                connection, uuid, self.studio.brand, self.studio.client_factory, fresh
+                connection, uuid, self.studio.profile(), self.studio.client_factory, fresh
             )
         return {"hooks": list(lines), "reels": self._reels(uuid)}
 
@@ -310,7 +307,7 @@ class App:
             target, seconds = make_reel(
                 self.studio.settings,
                 connection,
-                self.studio.brand,
+                self.studio.profile(),
                 uuid,
                 hook,
                 float(length),
@@ -403,7 +400,7 @@ class App:
             build_everything(
                 self.studio.settings,
                 connection,
-                self.studio.brand,
+                self.studio.profile(),
                 planned,
                 self.studio.client_factory,
                 fresh,

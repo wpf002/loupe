@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Loupe</string>
+	<key>CFBundleDisplayName</key>
+	<string>Loupe</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.loupe.mac</string>
+	<key>CFBundleExecutable</key>
+	<string>Loupe</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Loupe sorts your photos and videos into your content pillars. Nothing in your library is changed.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Loupe adds picks to albums in its own Loupe folder.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

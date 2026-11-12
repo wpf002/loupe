@@ -720,3 +720,19 @@ def studio_app(
     if open_page:
         webbrowser.open(url)
     serve(studio, port)
+
+
+@app.command(name="mac", hidden=True)
+def mac_app(
+    port: Annotated[int | None, typer.Option("--port", min=1024, max=65535)] = None,
+) -> None:
+    """M15: backend for Loupe.app. Started by the app's launcher, not by hand."""
+    from loupe.mac import MacAppError, run
+
+    settings = _load_settings()
+    if settings.server_url is None:
+        raise _fail("LOUPE_SERVER_URL is not set")
+    try:
+        run(settings.server_url, port)
+    except MacAppError as error:
+        raise _fail(str(error)) from error

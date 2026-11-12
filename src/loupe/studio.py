@@ -27,15 +27,24 @@ class StudioError(Exception):
     """A failure the owner can act on. The message is safe to display."""
 
 
+NO_BRAND = "No brand profile yet. Add brand.toml to the Loupe config folder."
+
+
 @dataclass(frozen=True)
 class Studio:
     """Everything the local app needs, built once by `loupe app` after the owner check."""
 
     settings: Settings
-    brand: BrandProfile
+    brand: BrandProfile | None
     client_factory: Callable[[], StructuredClient]
     planner: WeekPlanner
     find_original: Callable[[str], Path]
+
+    def profile(self) -> BrandProfile:
+        """The brand profile. Loupe.app starts without one for a new user."""
+        if self.brand is None:
+            raise StudioError(NO_BRAND)
+        return self.brand
 
 
 @dataclass(frozen=True)

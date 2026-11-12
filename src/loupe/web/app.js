@@ -323,7 +323,7 @@ async function loadState(setup) {
   const who = document.getElementById("who");
   try {
     const state = await api("GET", "/api/state");
-    const parts = [state.brand, `${state.takes} Takes`];
+    const parts = [state.brand, `${state.takes} Takes`].filter(Boolean);
     if (state.week) parts.push(`Week of ${weekLabel(state.week)}`);
     who.replaceChildren(h("span", { text: parts.join(" · ") }));
   } catch (error) {
