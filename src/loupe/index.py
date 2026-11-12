@@ -111,6 +111,14 @@ MIGRATIONS: tuple[str, ...] = (
         created_at TEXT NOT NULL
     );
     """,
+    """
+    CREATE TABLE emails (
+        week_start TEXT PRIMARY KEY,
+        model TEXT NOT NULL,
+        draft_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    """,
 )
 
 

@@ -25,6 +25,24 @@ COUNTER_SIZE = 30
 
 Font = ImageFont.FreeTypeFont
 RGB = tuple[int, int, int]
+Size = tuple[int, int]
+
+
+@dataclass(frozen=True)
+class Canvas:
+    """Image size plus the top and bottom bands kept clear of text."""
+
+    width: int
+    height: int
+    top: int = MARGIN
+    bottom: int = MARGIN
+
+    @property
+    def size(self) -> Size:
+        return (self.width, self.height)
+
+
+SLIDE_CANVAS = Canvas(WIDTH, HEIGHT)
 
 
 @dataclass(frozen=True)
@@ -75,84 +93,107 @@ def draw_lines(
         y += line_height(text.font)
 
 
-def cover_background(preview: Path | None, fallback: RGB) -> Image.Image:
+def cover_background(
+    preview: Path | None, fallback: RGB, size: Size = (WIDTH, HEIGHT)
+) -> Image.Image:
     """Her photo filling the slide, or a solid cover when the preview can't be decoded."""
-    solid = Image.new("RGB", (WIDTH, HEIGHT), fallback)
+    solid = Image.new("RGB", size, fallback)
     if preview is None:
         return solid
     try:
         with Image.open(preview) as photo:
-            return ImageOps.fit(ImageOps.exif_transpose(photo).convert("RGB"), (WIDTH, HEIGHT))
+            return ImageOps.fit(ImageOps.exif_transpose(photo).convert("RGB"), size)
     except (OSError, UnidentifiedImageError):
         return solid
 
 
 def shade_bottom(image: Image.Image, colour: RGB) -> Image.Image:
     """Darken the lower half so cover text reads on any photo."""
-    gradient = Image.linear_gradient("L").resize((WIDTH, HEIGHT))
+    gradient = Image.linear_gradient("L").resize(image.size)
     mask = gradient.point(lambda value: round(value * COVER_SHADE_ALPHA / 255))
     return Image.composite(Image.new("RGB", image.size, colour), image, mask)
 
 
-def render_cover(brand: BrandProfile, text: str, preview: Path | None, counter: str) -> Image.Image:
+def render_cover(
+    brand: BrandProfile,
+    text: str,
+    preview: Path | None,
+    counter: str,
+    canvas: Canvas = SLIDE_CANVAS,
+) -> Image.Image:
     ink, paper = hex_to_rgb(brand.colors.ink), hex_to_rgb(brand.colors.paper)
-    image = shade_bottom(cover_background(preview, hex_to_rgb(brand.colors.secondary)), ink)
+    background = cover_background(preview, hex_to_rgb(brand.colors.secondary), canvas.size)
+    image = shade_bottom(background, ink)
     draw = ImageDraw.Draw(image)
-    box = (WIDTH - 2 * MARGIN, HEIGHT // 2 - MARGIN)
+    box = (canvas.width - 2 * MARGIN, canvas.height // 2 - canvas.bottom)
     headline = fit_text(text, brand.fonts.display, COVER_MAX_SIZE, box)
     block_height = len(headline.lines) * line_height(headline.font)
-    top = HEIGHT - MARGIN - block_height
+    top = canvas.height - canvas.bottom - block_height
     draw.rectangle(
         (MARGIN, top - 3 * RULE_HEIGHT - RULE_HEIGHT, MARGIN + RULE_WIDTH, top - 3 * RULE_HEIGHT),
         fill=hex_to_rgb(brand.colors.accent),
     )
     draw_lines(draw, headline, (MARGIN, top), paper)
-    _draw_counter(draw, brand, counter, paper)
+    _draw_counter(draw, brand, counter, paper, canvas)
     return image
 
 
-def render_body(brand: BrandProfile, text: str, counter: str) -> Image.Image:
+def render_body(
+    brand: BrandProfile, text: str, counter: str, canvas: Canvas = SLIDE_CANVAS
+) -> Image.Image:
     ink, paper = hex_to_rgb(brand.colors.ink), hex_to_rgb(brand.colors.paper)
-    image = Image.new("RGB", (WIDTH, HEIGHT), paper)
+    image = Image.new("RGB", canvas.size, paper)
     draw = ImageDraw.Draw(image)
     draw.rectangle(
-        (MARGIN, MARGIN, MARGIN + RULE_WIDTH, MARGIN + RULE_HEIGHT),
+        (MARGIN, canvas.top, MARGIN + RULE_WIDTH, canvas.top + RULE_HEIGHT),
         fill=hex_to_rgb(brand.colors.accent),
     )
-    box = (WIDTH - 2 * MARGIN, HEIGHT - 4 * MARGIN)
+    box = (canvas.width - 2 * MARGIN, canvas.height - canvas.top - canvas.bottom - 2 * MARGIN)
     body = fit_text(text, brand.fonts.body, BODY_MAX_SIZE, box)
     block_height = len(body.lines) * line_height(body.font)
-    draw_lines(draw, body, (MARGIN, (HEIGHT - block_height) // 2), ink)
-    _draw_counter(draw, brand, counter, ink)
+    draw_lines(draw, body, (MARGIN, (canvas.height - block_height) // 2), ink)
+    _draw_counter(draw, brand, counter, ink, canvas)
     return image
 
 
 def _draw_counter(
-    draw: ImageDraw.ImageDraw, brand: BrandProfile, counter: str, colour: RGB
+    draw: ImageDraw.ImageDraw, brand: BrandProfile, counter: str, colour: RGB, canvas: Canvas
 ) -> None:
     font = ImageFont.truetype(str(brand.fonts.body), size=COUNTER_SIZE)
-    width = font.getlength(counter)
-    draw.text((WIDTH - MARGIN - width, MARGIN - COUNTER_SIZE // 2), counter, font=font, fill=colour)
+    left = canvas.width - MARGIN - font.getlength(counter)
+    draw.text((left, canvas.top - COUNTER_SIZE // 2), counter, font=font, fill=colour)
+
+
+def render_sequence(
+    brand: BrandProfile,
+    texts: list[str],
+    cover_preview: Path | None,
+    target_dir: Path,
+    canvas: Canvas = SLIDE_CANVAS,
+    prefix: str = "slide",
+) -> list[Path]:
+    """First text over her photo, the rest on paper. Writes <prefix>-NN.png."""
+    if not texts:
+        raise ValueError("a sequence needs at least one text")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    for number, text in enumerate(texts, start=1):
+        counter = f"{number:02d}/{len(texts):02d}"
+        image = (
+            render_cover(brand, text, cover_preview, counter, canvas)
+            if number == 1
+            else render_body(brand, text, counter, canvas)
+        )
+        path = target_dir / f"{prefix}-{number:02d}.png"
+        image.save(path, optimize=True)
+        paths.append(path)
+    return paths
 
 
 def render_carousel(
     brand: BrandProfile, slides: list[str], cover_preview: Path | None, target_dir: Path
 ) -> list[Path]:
-    if not slides:
-        raise ValueError("a carousel needs at least one slide")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    paths: list[Path] = []
-    for number, text in enumerate(slides, start=1):
-        counter = f"{number:02d}/{len(slides):02d}"
-        image = (
-            render_cover(brand, text, cover_preview, counter)
-            if number == 1
-            else render_body(brand, text, counter)
-        )
-        path = target_dir / f"slide-{number:02d}.png"
-        image.save(path, optimize=True)
-        paths.append(path)
-    return paths
+    return render_sequence(brand, slides, cover_preview, target_dir)
 
 
 def carousel_dir(renders_dir: Path, week_start: str, day: str) -> Path:

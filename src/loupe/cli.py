@@ -26,6 +26,7 @@ from loupe.sheets import Tile
 from loupe.train import PillarModel
 from loupe.transcribe import Transcript
 from loupe.vectors import VectorStore
+from loupe.week import PlannedPost, PlannedWeek
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 console = Console()
@@ -655,7 +656,6 @@ def week(
     from loupe.transcribe import talking_clips
     from loupe.week import (
         MEDIA_FOR_FORMAT,
-        PlannedPost,
         load_week,
         pillar_counts,
         plan_week,
@@ -722,37 +722,54 @@ def week(
         webbrowser.open(sheet.resolve().as_uri())
 
 
+StartOption = Annotated[
+    str | None, typer.Option("--start", help="Planned Monday, YYYY-MM-DD. Default: latest.")
+]
+
+
+def _planned_week(connection: sqlite3.Connection, start: str | None) -> PlannedWeek:
+    from loupe.week import latest_week, load_week
+
+    planned = load_week(connection, _monday(start)) if start else latest_week(connection)
+    if planned is None:
+        raise _fail("no week planned. Run `loupe week` first.")
+    return planned
+
+
+def _cover_preview(connection: sqlite3.Connection, planned: PlannedWeek, index: int) -> Path | None:
+    assets = planned.assets.get(index, [])
+    if not assets:
+        return None
+    row = connection.execute(
+        "SELECT preview_path FROM items WHERE uuid = ?", (assets[0],)
+    ).fetchone()
+    return Path(row[0]) if row and row[0] else None
+
+
+def _posts_with_covers(
+    connection: sqlite3.Connection, planned: PlannedWeek, post_format: str, day: str | None
+) -> list[tuple[PlannedPost, Path | None]]:
+    return [
+        (post, _cover_preview(connection, planned, index))
+        for index, post in enumerate(planned.plan.posts)
+        if post.format == post_format and (day is None or post.day == day.title())
+    ]
+
+
 @app.command()
 def carousel(
-    start: Annotated[
-        str | None, typer.Option("--start", help="Planned Monday, YYYY-MM-DD. Default: latest.")
-    ] = None,
+    start: StartOption = None,
     day: Annotated[str | None, typer.Option("--day", help="Mon to Sun. Default: all.")] = None,
 ) -> None:
     """M12: render the week's carousels as slide images. Writes to data/renders/."""
     from loupe.carousel import carousel_dir, render_carousel
-    from loupe.week import PostFormat, latest_week, load_week
 
     settings = _load_settings()
     profile = _load_brand()
     connection = connect(settings.index_path)
     try:
-        planned = load_week(connection, _monday(start)) if start else latest_week(connection)
-        if planned is None:
-            raise _fail("no week planned. Run `loupe week` first.")
-        jobs = []
-        for index, post in enumerate(planned.plan.posts):
-            if post.format is not PostFormat.CAROUSEL or (day and post.day != day.title()):
-                continue
-            assets = planned.assets.get(index, [])
-            row = (
-                connection.execute(
-                    "SELECT preview_path FROM items WHERE uuid = ?", (assets[0],)
-                ).fetchone()
-                if assets
-                else None
-            )
-            jobs.append((post, Path(row[0]) if row and row[0] else None))
+        planned = _planned_week(connection, start)
+        jobs = _posts_with_covers(connection, planned, "carousel", day)
     finally:
         connection.close()
     if not jobs:
@@ -762,3 +779,47 @@ def carousel(
         target = carousel_dir(renders, planned.start.isoformat(), post.day)
         paths = render_carousel(profile, post.slides, preview, target)
         console.print(f"{post.day}: {len(paths)} slides in {target}")
+
+
+@app.command()
+def everything(
+    start: StartOption = None,
+    fresh: Annotated[bool, typer.Option("--fresh", help="Ask Claude for a new email.")] = False,
+) -> None:
+    """M13: carousels, story frames and the week's email draft. Sends captions to Claude."""
+    from loupe.carousel import carousel_dir, render_carousel
+    from loupe.claude import ClaudeError
+    from loupe.newsletter import email_for_week, email_text
+    from loupe.story import render_story, story_dir
+
+    settings = _load_settings()
+    profile = _load_brand()
+    connection = connect(settings.index_path)
+    try:
+        planned = _planned_week(connection, start)
+        carousels = _posts_with_covers(connection, planned, "carousel", None)
+        stories = _posts_with_covers(connection, planned, "story", None)
+        try:
+            draft = email_for_week(connection, planned, profile, _claude_client(), fresh)
+        except ClaudeError as error:
+            raise _fail(str(error)) from error
+    finally:
+        connection.close()
+    renders = settings.data_dir / "renders"
+    week_key = planned.start.isoformat()
+    table = Table("Day", "Format", "Files", "Folder")
+    for post, preview in carousels:
+        target = carousel_dir(renders, week_key, post.day)
+        paths = render_carousel(profile, post.slides, preview, target)
+        table.add_row(post.day, "Carousel", str(len(paths)), str(target))
+    for post, preview in stories:
+        if not post.story_frames:
+            continue
+        target = story_dir(renders, week_key, post.day)
+        paths = render_story(profile, post.story_frames, preview, target)
+        table.add_row(post.day, "Story", str(len(paths)), str(target))
+    email_path = renders / "email" / f"{week_key}.txt"
+    email_path.parent.mkdir(parents=True, exist_ok=True)
+    email_path.write_text(email_text(draft), encoding="utf-8")
+    table.add_row("Mon", "Email", "1", str(email_path))
+    console.print(table)

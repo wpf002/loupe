@@ -15,6 +15,7 @@ writes the results back as albums that sync to the owner's phone.
 8. Writes hooks with Claude in the owner's voice.
 9. Plans the week with Claude and picks assets from the library.
 10. Renders carousel slides in the brand fonts and colours.
+11. Renders story frames and drafts the week's email with Claude.
 
 Photos are never edited or deleted. The only data sent off the machine is the owner's
 text, transcripts and downsized previews, to the Claude API, from `loupe hooks` on.
@@ -62,6 +63,7 @@ uv run loupe hooks UUID              # needs ANTHROPIC_API_KEY in .env
 uv run loupe reel UUID --hook 2 --length 30
 uv run loupe week --open
 uv run loupe carousel --day Wed
+uv run loupe everything             # carousels, stories, email
 ```
 
 ## Configuration
@@ -85,4 +87,4 @@ uv run pytest
 
 ## Status
 
-`doctor` and M1 to M12 (scan through carousel) built, tested on synthetic fixtures only. Claude calls use `claude-opus-5-5` with server-side refusal fallbacks on. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.
+`doctor` and M1 to M13 (scan through everything) built, tested on synthetic fixtures only. Claude calls use `claude-opus-5-5` with server-side refusal fallbacks on. First `embed` run downloads the SigLIP2 weights (several GB) to the Hugging Face cache. Build order is in `CLAUDE.md`.
