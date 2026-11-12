@@ -30,7 +30,8 @@ against them.
     `LOUPE_OWNER_MACOS_USER`. Never weaken this check. The developer's own
     library is never read, scanned, or used as a stand-in.
 11. Items matching `[exclusions]` in the config, and hidden items, are stored as
-    UUID plus reason only. Every stage after scan reads its work list from
+    UUID plus reason only. Person names are stored for eligible items only and
+    never logged. Every stage after scan reads its work list from
     `index.eligible_uuids()` and nothing else.
 
 ## Stack
@@ -62,8 +63,8 @@ Every command takes `--limit N` so it can be tested on a small slice.
 
 - **Done: `loupe doctor`**, exclusions, local config override.
 - **M1 `loupe scan`**: read the library into SQLite. Per item: uuid, date, media
-  type, duration, album names, Apple labels, Apple quality score, preview path,
-  flags (hidden, screenshot, burst, original is local). Print item totals and a
+  type, duration, album names, Apple labels, named people (unnamed faces dropped),
+  Apple quality score, preview path, flags (hidden, screenshot, burst, original is local). Print item totals and a
   count per pillar album.
 - **M2 `loupe embed`**: embed every preview in batches on MPS. Resumable. Report
   throughput and anything skipped with the reason.
@@ -75,8 +76,10 @@ Every command takes `--limit N` so it can be tested on a small slice.
   ones. An item may land in more than one pillar.
 - **M5 `loupe write-albums`**: create albums in the Loupe folder, one per pillar,
   and add confident picks in batches. Dry run by default.
-- **M6 `loupe search "text"`**: text query against the embeddings, optional pillar
-  and media-type filters, returns UUIDs and opens a contact sheet.
+- **M6 `loupe search "text"`**: text query against the embeddings, returns UUIDs
+  and opens a contact sheet. Filters: pillar, media type, person (from scan), and
+  zero-shot facets scored from the M2 embeddings: light (natural, artificial),
+  shot type (close-up, medium, wide, selfie), setting (indoor, outdoor).
 
 ## Later, Not Now
 

@@ -14,6 +14,9 @@ from osxphotos.utils import get_system_library_path
 
 from loupe.models import LibraryItem, MediaType
 
+# osxphotos names unnamed faces with this value (osxphotos._constants._UNKNOWN_PERSON).
+UNNAMED_PERSON = "_UNKNOWN_"
+
 UUID_LENGTH = 36
 PREVIEW_EXTENSIONS = frozenset({".jpeg", ".jpg", ".heic", ".png"})
 DERIVATIVE_ROOTS = ("resources/derivatives",)
@@ -96,6 +99,11 @@ def _apple_score(photo: Any) -> float | None:
     return None if score is None else score.overall
 
 
+def named_persons(names: list[str | None]) -> tuple[str, ...]:
+    """Drop faces Photos has not named. osxphotos reports them as _UNKNOWN_ or None."""
+    return tuple(name for name in names if name and name != UNNAMED_PERSON)
+
+
 def to_library_item(photo: Any, previews: dict[str, str]) -> LibraryItem:
     return LibraryItem(
         uuid=photo.uuid,
@@ -106,7 +114,7 @@ def to_library_item(photo: Any, previews: dict[str, str]) -> LibraryItem:
         preview_path=_preview_for(photo, previews),
         albums=tuple(photo.albums),
         labels=tuple(photo.labels),
-        persons=tuple(photo.persons),
+        persons=named_persons(photo.persons),
         is_hidden=bool(photo.hidden),
         is_screenshot=bool(photo.screenshot),
         is_screen_recording=bool(photo.screen_recording),

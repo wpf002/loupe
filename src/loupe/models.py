@@ -20,7 +20,7 @@ class ExclusionReason(StrEnum):
 
 @dataclass(frozen=True)
 class LibraryItem:
-    """One photo or video as read from Photos. Persons are used for exclusion only."""
+    """One photo or video as read from Photos. Persons holds named people only."""
 
     uuid: str
     taken_at: datetime | None

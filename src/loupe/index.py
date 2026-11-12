@@ -36,6 +36,14 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX item_albums_by_album ON item_albums(album);
     CREATE INDEX items_by_exclusion ON items(excluded_reason);
     """,
+    """
+    CREATE TABLE item_persons (
+        uuid TEXT NOT NULL REFERENCES items(uuid) ON DELETE CASCADE,
+        person TEXT NOT NULL,
+        PRIMARY KEY (uuid, person)
+    );
+    CREATE INDEX item_persons_by_person ON item_persons(person);
+    """,
 )
 
 
@@ -78,10 +86,11 @@ def _now() -> str:
 def _clear_children(connection: sqlite3.Connection, uuid: str) -> None:
     connection.execute("DELETE FROM item_albums WHERE uuid = ?", (uuid,))
     connection.execute("DELETE FROM item_labels WHERE uuid = ?", (uuid,))
+    connection.execute("DELETE FROM item_persons WHERE uuid = ?", (uuid,))
 
 
 def upsert_excluded(connection: sqlite3.Connection, uuid: str, reason: ExclusionReason) -> None:
-    """Store only the UUID and the reason. No date, album, label or preview path is kept."""
+    """Store only the UUID and the reason. No date, album, label, person or preview is kept."""
     _clear_children(connection, uuid)
     connection.execute(
         """
@@ -140,6 +149,10 @@ def upsert_item(connection: sqlite3.Connection, item: LibraryItem) -> None:
     connection.executemany(
         "INSERT OR IGNORE INTO item_labels (uuid, label) VALUES (?, ?)",
         [(item.uuid, label) for label in item.labels],
+    )
+    connection.executemany(
+        "INSERT OR IGNORE INTO item_persons (uuid, person) VALUES (?, ?)",
+        [(item.uuid, person) for person in item.persons],
     )
 
 

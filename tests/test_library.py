@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from loupe.library import build_preview_index, to_library_item
+from loupe.library import UNNAMED_PERSON, build_preview_index, named_persons, to_library_item
 from loupe.models import MediaType
 from tests.fixtures import UUID_A, UUID_B
 
@@ -68,3 +68,7 @@ def test_local_video_with_duration() -> None:
     assert item.original_is_local is True
     assert item.apple_score is None
     assert item.preview_path is None
+
+
+def test_unnamed_faces_are_dropped() -> None:
+    assert named_persons(["Test Person", UNNAMED_PERSON, None]) == ("Test Person",)

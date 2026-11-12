@@ -74,3 +74,14 @@ def test_unexcluding_restores_metadata(tmp_path: Path) -> None:
     scan_items(connection, _items(), EXCLUSIONS)
     scan_items(connection, _items(), Exclusions())
     assert album_counts(connection) == {"CC Travel": 3, "Private": 1}
+
+
+def test_named_persons_are_stored_for_eligible_items_only(tmp_path: Path) -> None:
+    connection = connect(tmp_path / "index.sqlite")
+    items = [
+        make_item(UUID_A, persons=("Test Person",)),
+        make_item(UUID_B, albums=("Private",), persons=("Test Person",)),
+    ]
+    scan_items(connection, items, EXCLUSIONS)
+    rows = connection.execute("SELECT uuid, person FROM item_persons").fetchall()
+    assert rows == [(UUID_A, "Test Person")]
