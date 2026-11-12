@@ -55,17 +55,38 @@ def user_content(request: Request) -> list[dict[str, object]]:
     return blocks
 
 
-class AnthropicClient:
-    """Claude Opus 5.5 with structured output and server-side refusal fallbacks."""
+@dataclass(frozen=True)
+class ProxyAuth:
+    """Loupe.app sends calls to the Loupe server with the account's session token."""
 
-    def __init__(self) -> None:
+    server_url: str
+    token: str
+
+
+class AnthropicClient:
+    """Claude Opus 5.5 with structured output and server-side refusal fallbacks.
+
+    The CLI reads ANTHROPIC_API_KEY. With `proxy`, the app goes through the Loupe
+    server instead, and the environment's key is never read or sent.
+    """
+
+    def __init__(self, proxy: ProxyAuth | None = None) -> None:
         import anthropic
 
         self._anthropic = anthropic
+        self._proxied = proxy is not None
         try:
-            self._client = anthropic.Anthropic(
-                timeout=REQUEST_TIMEOUT_SECONDS, max_retries=MAX_RETRIES
-            )
+            if proxy is None:
+                self._client = anthropic.Anthropic(
+                    timeout=REQUEST_TIMEOUT_SECONDS, max_retries=MAX_RETRIES
+                )
+            else:
+                self._client = anthropic.Anthropic(
+                    base_url=proxy.server_url,
+                    auth_token=proxy.token,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                    max_retries=MAX_RETRIES,
+                )
         except anthropic.AnthropicError as error:
             raise ClaudeError("ANTHROPIC_API_KEY is missing. Add it to .env.") from error
 
@@ -83,8 +104,12 @@ class AnthropicClient:
                 output_format=output_type,
             )
         except errors.AuthenticationError as error:
+            if self._proxied:
+                raise ClaudeError("Loupe session expired. Sign in again.") from error
             raise ClaudeError("Claude rejected the API key in .env") from error
         except errors.RateLimitError as error:
+            if self._proxied:
+                raise ClaudeError("Claude limit reached for this month or minute") from error
             raise ClaudeError("Claude rate limit hit; try again in a minute") from error
         except errors.APIStatusError as error:
             raise ClaudeError(f"Claude returned HTTP {error.status_code}") from error
