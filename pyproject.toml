@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Phase 2. Leave uninstalled until the sorter works.
+# transcribe: M8. secondpass (anthropic): M10 on. mcp: later.
 mcp = ["mcp"]
 transcribe = ["mlx-whisper"]
 secondpass = ["anthropic"]

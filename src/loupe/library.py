@@ -145,3 +145,15 @@ def library_stats(library_path: Path) -> LibraryStats:
         with_preview=sum(1 for photo in photos if _preview_for(photo, previews) is not None),
         originals_local=sum(1 for photo in photos if not photo.ismissing and photo.path),
     )
+
+
+def original_paths(library_path: Path, uuids: list[str]) -> dict[str, Path]:
+    """Paths of originals that are on disk. Read-only; never triggers an iCloud download."""
+    if not uuids:
+        return {}
+    db = open_library(library_path)
+    found: dict[str, Path] = {}
+    for photo in db.photos(uuid=uuids, intrash=False):
+        if not photo.ismissing and photo.path is not None:
+            found[photo.uuid] = Path(photo.path)
+    return found

@@ -421,3 +421,39 @@ def brand(
     console.print(f"Preview: {preview}")
     if open_page:
         webbrowser.open(preview.resolve().as_uri())
+
+
+@app.command()
+def transcribe(limit: LimitOption = None) -> None:
+    """M8: transcribe local video originals with word timestamps. Safe to re-run."""
+    from rich.progress import Progress
+
+    from loupe.library import LibraryNotFoundError, original_paths, resolve_library_path
+    from loupe.transcribe import pending_clips, transcribe_clips
+
+    settings = _load_settings()
+    _require_owner_account(settings)
+    try:
+        library_path = resolve_library_path(settings.photos_library)
+    except LibraryNotFoundError as error:
+        raise _fail(str(error)) from error
+    try:
+        from loupe.transcribe import MlxTranscriber
+
+        transcriber = MlxTranscriber()
+    except ImportError as error:
+        raise _fail("mlx-whisper is not installed. Run `uv sync --extra transcribe`.") from error
+    connection = connect(settings.index_path)
+    try:
+        pending = pending_clips(connection, limit)
+        paths = original_paths(library_path, pending)
+        with Progress(console=console) as progress:
+            task = progress.add_task("Transcribing", total=len(pending))
+            result = transcribe_clips(
+                connection, pending, paths, transcriber, on_item=lambda: progress.advance(task)
+            )
+    finally:
+        connection.close()
+    console.print(f"Transcribed {result.transcribed} clips, {result.talking} with talking.")
+    for reason, count in result.skipped.items():
+        console.print(f"Skipped {count}: {reason}")

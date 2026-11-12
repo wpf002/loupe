@@ -78,6 +78,22 @@ MIGRATIONS: tuple[str, ...] = (
         PRIMARY KEY (album, uuid)
     );
     """,
+    """
+    CREATE TABLE transcripts (
+        uuid TEXT PRIMARY KEY REFERENCES items(uuid) ON DELETE CASCADE,
+        model TEXT NOT NULL,
+        language TEXT,
+        text TEXT NOT NULL,
+        words_json TEXT NOT NULL,
+        word_count INTEGER NOT NULL,
+        is_talking INTEGER NOT NULL,
+        transcribed_at TEXT NOT NULL
+    );
+    CREATE TABLE transcribe_skips (
+        uuid TEXT PRIMARY KEY REFERENCES items(uuid) ON DELETE CASCADE,
+        reason TEXT NOT NULL
+    );
+    """,
 )
 
 
