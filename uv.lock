@@ -677,7 +677,6 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyobjc-framework-photos" },
     { name = "pyobjc-framework-security" },
-    { name = "pyobjc-framework-webkit" },
     { name = "python-dotenv" },
     { name = "rich" },
     { name = "scikit-learn" },
@@ -716,7 +715,6 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.14.3" },
     { name = "pyobjc-framework-photos", specifier = "==13.0" },
     { name = "pyobjc-framework-security", specifier = "==13.0" },
-    { name = "pyobjc-framework-webkit", specifier = "==13.0" },
     { name = "python-dotenv" },
     { name = "rich" },
     { name = "scikit-learn" },
@@ -1743,19 +1741,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/13/9f/f1f90a39966bb2e0b25176fe20d44572ac86f2fff1b724eed6c87a144ed3/pyobjc_framework_vision-13.0.tar.gz", hash = "sha256:e9197f267528bf345ccae3f949d4acf6330b69658b9b02dd03088e6e1f4395bb", size = 70656, upload-time = "2026-10-30T10:47:53.999Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6e/81/6453fb0037919900d400aa19106ddc9c8c1b2041966527fed6a10e7f3bf2/pyobjc_framework_vision-13.0-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:bade47ff19574d3f798d7256ff81a1560da212f2c4d7fde90e1629148c3a9d89", size = 14749, upload-time = "2026-10-30T10:45:24.094Z" },
-]
-
-[[package]]
-name = "pyobjc-framework-webkit"
-version = "13.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/c3/8cf2bd403676ac956046150c666357f3eaf246e936bfd29069dba59534ce/pyobjc_framework_webkit-13.0.tar.gz", hash = "sha256:80debaa16c416895214c74e483bd13f510fc0965e4def34653e37705a5eef1a6", size = 334160, upload-time = "2026-10-30T10:47:54.863Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e6/26/cab74d983eedde4b07a3f79c442717eaf3045911dbd0a00da26701cdeff0/pyobjc_framework_webkit-13.0-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:868cbeca83d079af6f049765d018db731d8fb2fb3bbfaf8be7fd6e96e8c6ca1a", size = 51146, upload-time = "2026-10-30T10:45:31.304Z" },
 ]
 
 [[package]]
