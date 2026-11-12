@@ -20,6 +20,10 @@ if [[ ! -x "$python" ]]; then
   echo "Run 'uv sync' first." >&2
   exit 1
 fi
+if ! "$python" -c "import anthropic" 2>/dev/null; then
+  echo "Run 'uv sync --extra secondpass' first. The app needs it for Claude calls." >&2
+  exit 1
+fi
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
