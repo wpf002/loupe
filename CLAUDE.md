@@ -2,7 +2,7 @@
 
 Sorts one person's Apple Photos library (about 200k photos and videos) into her
 content pillars so she can grab assets for posts from her phone. Runs entirely on
-this Mac, inside the macOS user account that is signed into her iCloud.
+her own Mac, inside the macOS user account that is signed into her iCloud.
 
 Her existing hand-made albums (names starting with "CC ", plus the extras in
 `config/pillars.toml`) are the labeled examples. Everything else gets classified

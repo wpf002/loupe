@@ -1,55 +1,60 @@
-# Move To The Owner's Account
+# Set Up On Her Mac
 
-Brings Loupe up in the second macOS account on this Mac, where her library lives.
-Loupe refuses to open a Photos library in any account other than the one named in
+Loupe runs on the owner's own Mac, in the macOS account that is already signed
+into her iCloud. Her library and every file Loupe writes stay on that Mac. Loupe
+refuses to open a Photos library in any account other than the one named in
 `LOUPE_OWNER_MACOS_USER`.
 
-## 1. Sign In And Sync
+## 1. Check Her Photos
 
-1. Log into her macOS account.
-2. She signs into her Apple ID in System Settings and types the password and 2FA
-   code herself. Nothing about her Apple ID goes in the repo, `.env`, or a log.
-3. Open Photos. Settings > iCloud: iCloud Photos on, Optimize Mac Storage on.
-4. Wait until the bottom of the Library view no longer shows syncing progress.
+On her Mac, in her account:
 
-## 2. Access From The Developer's Account
+1. System Settings > Apple Account > iCloud > Photos: Sync This Mac on.
+2. Photos > Settings > iCloud: Optimize Mac Storage on.
+3. Wait until the bottom of the Library view no longer shows syncing progress.
 
-Her library stays in her account. The developer works on it over SSH to
-localhost, so every command runs as her user and the owner-account check passes.
-Never sign her Apple ID into the developer's account; it would replace that
-account's iCloud Photos.
+Nothing about her Apple ID goes in the repo, `.env`, or a log.
 
-In her account:
+## 2. Access From The Developer's Mac
+
+Both Macs on the same network. The developer works on her Mac over SSH, so every
+command runs as her user and the owner-account check passes.
+
+On her Mac:
 
 1. System Settings > General > Sharing > Remote Login: on.
 2. Click the info button next to Remote Login. Allow access for her user only.
    Turn on "Allow full disk access for remote users".
+3. Note the local hostname shown at the bottom of the Sharing pane, for example
+   `amandas-macbook-air.local`.
+4. In Terminal, run `whoami` and note the result.
 
-In the developer's account:
+On the developer's Mac (skip `ssh-keygen` if `~/.ssh/id_ed25519.pub` exists):
 
 ```bash
 ssh-keygen -t ed25519
 ```
 
 ```bash
-ssh-copy-id <her-user>@localhost
+ssh-copy-id <her-user>@<her-hostname>.local
 ```
 
 She types her macOS password once. Then check:
 
 ```bash
-ssh <her-user>@localhost whoami
+ssh <her-user>@<her-hostname>.local whoami
 ```
 
-To run Claude Code there, add an SSH connection to `<her-user>@localhost` in the
-Claude desktop app and start sessions on it, or run `ssh <her-user>@localhost`
-and then `claude`. Steps 3 to 8 below can all run over this connection.
+To run Claude Code there, add an SSH connection to `<her-user>@<her-hostname>.local`
+in the Claude desktop app and start sessions on it, or run
+`ssh <her-user>@<her-hostname>.local` and then `claude`. Steps 3 to 8 below can all
+run over this connection.
 
 `write-albums --apply` controls the Photos app, which needs her logged-in
-desktop session and the Automation prompt. Run that one command from her desktop.
+desktop session and the Automation prompt. Run that one command at her Mac.
 
-To revoke access, turn off Remote Login or remove the key from her
-`~/.ssh/authorized_keys`.
+Remote Login accepts connections from the network. When setup is done, turn it
+off, or remove the developer's key from her `~/.ssh/authorized_keys`.
 
 ## 3. Install Tools
 
@@ -129,7 +134,7 @@ uv run loupe review
 uv run loupe write-albums
 ```
 
-`write-albums` without `--apply` is a dry run. Only run `--apply` from her desktop
+`write-albums` without `--apply` is a dry run. Only run `--apply` at her Mac
 after she has looked at the review pages:
 
 ```bash
@@ -150,4 +155,4 @@ uv run loupe transcribe
 uv run loupe app --open
 ```
 
-The app runs on http://127.0.0.1:8765 in her account only.
+The app runs on http://127.0.0.1:8765 on her Mac only.

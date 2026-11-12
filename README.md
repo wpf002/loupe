@@ -5,7 +5,7 @@ writes the results back as albums that sync to the owner's phone.
 
 ## What It Does
 
-1. Reads the Photos library on this Mac.
+1. Reads the Photos library on her Mac.
 2. Embeds every photo and video preview with a local vision model.
 3. Learns the pillars from albums the owner already made.
 4. Classifies the rest and builds a review page.
