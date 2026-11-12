@@ -1,0 +1,30 @@
+# Which existing albums count as labeled examples.
+# Every album whose name starts with one of these prefixes becomes a pillar.
+label_album_prefixes = ["CC "]
+
+# Extra albums to treat as pillars even though they lack the prefix.
+include_albums = ["Hotel Collaboration"]
+
+# Albums that match a prefix but should be ignored.
+exclude_albums = []
+
+# A photo needs at least this probability to be placed in a pillar.
+min_confidence = 0.80
+
+# Items between review_floor and min_confidence go to the review page only.
+review_floor = 0.50
+
+# Pillars with fewer labeled examples than this are skipped and reported.
+min_examples_per_pillar = 30
+
+# Off-limits items. Anything matching is never embedded, classified, searched,
+# shown on a review page, or written to an album. Scan stores only its UUID.
+[exclusions]
+# Exact album names as shown in Photos.
+albums = []
+# People as named in Photos. Unnamed faces cannot be matched.
+persons = []
+# Inclusive capture-date ranges, e.g. { start = 2021-06-01, end = 2021-06-30 }.
+date_ranges = []
+# Photos UUIDs.
+uuids = []

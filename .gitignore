@@ -1,0 +1,31 @@
+# Personal library data. Never commit any of this.
+data/
+*.npy
+*.npz
+*.sqlite
+*.sqlite3
+*.db
+*.photoslibrary/
+review/
+exports/
+
+# Stand-in pillars for testing on a non-owner library
+config/pillars.local.toml
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# macOS
+.DS_Store
