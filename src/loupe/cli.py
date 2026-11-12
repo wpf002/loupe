@@ -1,6 +1,7 @@
 """Loupe command line. Commands get added milestone by milestone (see CLAUDE.md)."""
 
 import sqlite3
+from datetime import date
 from pathlib import Path
 from typing import Annotated
 
@@ -625,6 +626,16 @@ def _week_tiles(connection: sqlite3.Connection, uuids: list[str]) -> list[Tile]:
     return tiles
 
 
+def _monday(value: str) -> date:
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as error:
+        raise _fail("--start must be YYYY-MM-DD") from error
+    if parsed.weekday() != 0:
+        raise _fail("--start must be a Monday")
+    return parsed
+
+
 @app.command()
 def week(
     start: Annotated[
@@ -635,7 +646,6 @@ def week(
 ) -> None:
     """M11: plan Monday to Sunday with Claude and pick assets through search."""
     import webbrowser
-    from datetime import date
 
     from loupe.claude import ClaudeError
     from loupe.encoder import SiglipEncoder
@@ -653,12 +663,7 @@ def week(
         week_start,
     )
 
-    try:
-        monday = date.fromisoformat(start) if start else week_start(date.today())
-    except ValueError as error:
-        raise _fail("--start must be YYYY-MM-DD") from error
-    if monday.weekday() != 0:
-        raise _fail("--start must be a Monday")
+    monday = _monday(start) if start else week_start(date.today())
     settings = _load_settings()
     config = _load_config()
     profile = _load_brand()
@@ -715,3 +720,45 @@ def week(
     console.print(f"Sheet: {sheet}")
     if open_page:
         webbrowser.open(sheet.resolve().as_uri())
+
+
+@app.command()
+def carousel(
+    start: Annotated[
+        str | None, typer.Option("--start", help="Planned Monday, YYYY-MM-DD. Default: latest.")
+    ] = None,
+    day: Annotated[str | None, typer.Option("--day", help="Mon to Sun. Default: all.")] = None,
+) -> None:
+    """M12: render the week's carousels as slide images. Writes to data/renders/."""
+    from loupe.carousel import carousel_dir, render_carousel
+    from loupe.week import PostFormat, latest_week, load_week
+
+    settings = _load_settings()
+    profile = _load_brand()
+    connection = connect(settings.index_path)
+    try:
+        planned = load_week(connection, _monday(start)) if start else latest_week(connection)
+        if planned is None:
+            raise _fail("no week planned. Run `loupe week` first.")
+        jobs = []
+        for index, post in enumerate(planned.plan.posts):
+            if post.format is not PostFormat.CAROUSEL or (day and post.day != day.title()):
+                continue
+            assets = planned.assets.get(index, [])
+            row = (
+                connection.execute(
+                    "SELECT preview_path FROM items WHERE uuid = ?", (assets[0],)
+                ).fetchone()
+                if assets
+                else None
+            )
+            jobs.append((post, Path(row[0]) if row and row[0] else None))
+    finally:
+        connection.close()
+    if not jobs:
+        raise _fail("no carousel in that week or on that day")
+    renders = settings.data_dir / "renders"
+    for post, preview in jobs:
+        target = carousel_dir(renders, planned.start.isoformat(), post.day)
+        paths = render_carousel(profile, post.slides, preview, target)
+        console.print(f"{post.day}: {len(paths)} slides in {target}")
