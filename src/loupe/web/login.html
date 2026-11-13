@@ -14,7 +14,7 @@
   </header>
   <main>
     <form class="setup login" id="login" novalidate>
-      <h1>Sign In</h1>
+      <h1 id="title">Sign In</h1>
       <div class="field">
         <label class="label" for="email">Email</label>
         <input id="email" name="email" type="email" autocomplete="username" required>
@@ -24,7 +24,8 @@
         <input id="password" name="password" type="password" autocomplete="current-password" required>
       </div>
       <div id="error" hidden></div>
-      <button class="button primary" type="submit">Sign In</button>
+      <button class="button primary" id="submit" type="submit">Sign In</button>
+      <button class="button" id="switch" type="button">Create Account</button>
     </form>
   </main>
 </body>

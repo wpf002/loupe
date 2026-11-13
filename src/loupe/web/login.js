@@ -3,6 +3,31 @@
 /* Posts with fetch because the page's CSP blocks form submission. */
 const form = document.getElementById("login");
 const errorSlot = document.getElementById("error");
+const title = document.getElementById("title");
+const submit = document.getElementById("submit");
+const switchMode = document.getElementById("switch");
+const password = document.getElementById("password");
+
+const MODES = {
+  signIn: {
+    title: "Sign In",
+    submit: "Sign In",
+    other: "Create Account",
+    endpoint: "/auth/sign-in",
+    autocomplete: "current-password",
+    next: "create",
+  },
+  create: {
+    title: "Create Account",
+    submit: "Create Account",
+    other: "Sign In",
+    endpoint: "/auth/create-account",
+    autocomplete: "new-password",
+    next: "signIn",
+  },
+};
+
+let mode = MODES.signIn;
 
 function showError(message) {
   errorSlot.className = "alert";
@@ -16,19 +41,30 @@ function showError(message) {
   errorSlot.hidden = false;
 }
 
+function applyMode(next) {
+  mode = next;
+  title.textContent = mode.title;
+  document.title = `${mode.title} · Loupe`;
+  submit.textContent = mode.submit;
+  switchMode.textContent = mode.other;
+  password.autocomplete = mode.autocomplete;
+  errorSlot.hidden = true;
+}
+
+switchMode.addEventListener("click", () => applyMode(MODES[mode.next]));
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const submit = form.querySelector("button[type=submit]");
   submit.disabled = true;
   submit.setAttribute("aria-busy", "true");
   try {
-    const response = await fetch("/auth/sign-in", {
+    const response = await fetch(mode.endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: form.email.value, password: form.password.value }),
+      body: JSON.stringify({ email: form.email.value, password: password.value }),
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `Sign in failed (${response.status})`);
+    if (!response.ok) throw new Error(payload.error || `${mode.submit} failed (${response.status})`);
     location.assign("/");
   } catch (error) {
     showError(error.message);

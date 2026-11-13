@@ -31,7 +31,7 @@ from urllib.parse import parse_qs, urlsplit
 import numpy as np
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from loupe.account import AccountClient, AccountError, validate_server_url
+from loupe.account import AccountClient, AccountError, SignedIn, validate_server_url
 from loupe.brand import BrandProfile
 from loupe.claude import ProxyAuth, StructuredClient
 from loupe.config import PillarConfig
@@ -408,6 +408,16 @@ def cleared_cookie() -> str:
     return f"{COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"
 
 
+PASSED_ACCOUNT_STATUSES = frozenset({400, 401, 409, 429})
+
+
+def _account_error_status(status: int | None) -> HTTPStatus:
+    # No status means AccountClient rejected the input before calling the server.
+    if status is None:
+        return HTTPStatus.BAD_REQUEST
+    return HTTPStatus(status) if status in PASSED_ACCOUNT_STATUSES else HTTPStatus.BAD_GATEWAY
+
+
 @dataclass(frozen=True)
 class CookieReply:
     body: Json
@@ -458,6 +468,8 @@ class HostedHandler(LoupeHandler):
         self._check_origin()
         if path == "/auth/sign-in":
             return self._sign_in()
+        if path == "/auth/create-account":
+            return self._create_account()
         if path == "/auth/sign-out":
             return self._sign_out()
         return super()._post()
@@ -520,16 +532,20 @@ class HostedHandler(LoupeHandler):
         return hops[-1] if hops else self.client_address[0]
 
     def _sign_in(self) -> Reply:
+        return self._start_session(self.service.accounts.sign_in, "signed in")
+
+    def _create_account(self) -> Reply:
+        return self._start_session(self.service.accounts.create_account, "account created")
+
+    def _start_session(self, action: Callable[[str, str], SignedIn], event: str) -> Reply:
         if not self.service.limiter.allow(self._client_address()):
             raise HttpError(HTTPStatus.TOO_MANY_REQUESTS, "Too many tries. Wait 15 minutes.")
         email, password = _credentials(self._json_body(None))
         try:
-            signed_in = self.service.accounts.sign_in(email, password)
+            signed_in = action(email, password)
         except AccountError as error:
-            passed = error.status in (400, 401, 429)
-            status = HTTPStatus(error.status) if passed else HTTPStatus.BAD_GATEWAY
-            raise HttpError(status, str(error)) from error
-        logger.info("signed in")
+            raise HttpError(_account_error_status(error.status), str(error)) from error
+        logger.info(event)
         return CookieReply({"ok": True}, session_cookie(signed_in.token))
 
     def _sign_out(self) -> Reply:

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from loupe.account import AccountError, SignedIn, Usage
+from loupe.account import MIN_PASSWORD_LENGTH, AccountError, SignedIn, Usage
 from loupe.hosted import (
     COOKIE_NAME,
     SIGN_IN_ATTEMPTS,
@@ -38,6 +38,15 @@ class FakeAccounts:
     def sign_in(self, email: str, password: str) -> SignedIn:
         if password != PASSWORD:
             raise AccountError("Wrong email or password", 401)
+        token = f"token-{len(self.tokens)}"
+        self.tokens[token] = email
+        return SignedIn(token=token, email=email)
+
+    def create_account(self, email: str, password: str) -> SignedIn:
+        if len(password) < MIN_PASSWORD_LENGTH:
+            raise AccountError(f"Use at least {MIN_PASSWORD_LENGTH} characters")
+        if email in self.tokens.values():
+            raise AccountError("Account exists", 409)
         token = f"token-{len(self.tokens)}"
         self.tokens[token] = email
         return SignedIn(token=token, email=email)
@@ -131,6 +140,43 @@ def test_sign_in_sets_a_locked_down_cookie(hosted) -> None:
     for attribute in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/"):
         assert attribute in cookie
     assert "Strict-Transport-Security" in headers
+
+
+def _create(port: int, email: str, password: str, origin: str = ORIGIN):
+    body = json.dumps({"email": email, "password": password}).encode()
+    headers = {"Content-Type": "application/json", "Origin": origin}
+    return _call(port, "POST", "/auth/create-account", body, headers)
+
+
+def test_create_account_signs_the_browser_in(hosted) -> None:
+    port, _, _ = hosted
+    status, headers, _ = _create(port, "new@example.com", PASSWORD)
+    assert status == HTTPStatus.OK
+    status, _, body = _call(port, "GET", "/api/setup", headers={"Cookie": _cookie(headers)})
+    assert status == HTTPStatus.OK
+    assert json.loads(body)["account"]["email"] == "new@example.com"
+
+
+def test_create_account_rejects_a_taken_email(hosted) -> None:
+    port, _, _ = hosted
+    _create(port, "new@example.com", PASSWORD)
+    status, headers, body = _create(port, "new@example.com", PASSWORD)
+    assert status == HTTPStatus.CONFLICT
+    assert "Set-Cookie" not in headers
+    assert json.loads(body)["error"] == "Account exists"
+
+
+def test_create_account_rejects_a_short_password(hosted) -> None:
+    port, _, _ = hosted
+    status, _, body = _create(port, "new@example.com", "short")
+    assert status == HTTPStatus.BAD_REQUEST
+    assert str(MIN_PASSWORD_LENGTH) in json.loads(body)["error"]
+
+
+def test_create_account_needs_the_site_origin(hosted) -> None:
+    port, _, _ = hosted
+    status, _, _ = _create(port, "new@example.com", PASSWORD, origin="https://evil.test")
+    assert status == HTTPStatus.FORBIDDEN
 
 
 def test_sign_in_needs_the_site_origin(hosted) -> None:
