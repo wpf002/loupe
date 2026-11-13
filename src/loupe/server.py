@@ -221,8 +221,8 @@ class App:
 
     def library_job(self, path: str, body: Json) -> Json:
         """Sorting runs in its own thread and lock, so the other tabs stay usable meanwhile."""
-        if self.hosted:
-            # Sorting reads Photos and writes albums, so it runs only in Loupe.app.
+        if self.hosted and path != "/api/library/sort":
+            # The web sorts synced previews. Album writes need Photos, so they stay in the app.
             raise HttpError(HTTPStatus.NOT_FOUND, "Not found")
 
         def start(sorter: Sorter) -> Json:

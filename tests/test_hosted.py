@@ -1,3 +1,4 @@
+import gzip
 import http.client
 import json
 import threading
@@ -14,7 +15,7 @@ from loupe.hosted import (
     SIGN_IN_ATTEMPTS,
     HostedConfig,
     SessionGate,
-    SharedTextEncoder,
+    SharedEncoder,
     Tenants,
     account_key,
     build_service,
@@ -69,7 +70,7 @@ def hosted(tmp_path: Path) -> Iterator[tuple[int, FakeAccounts, Path]]:
     config = HostedConfig(
         root=tmp_path, server_url="https://server.test", public_host=PUBLIC_HOST, port=8080
     )
-    service = build_service(config, SharedTextEncoder(lambda: None), accounts)  # type: ignore[arg-type]
+    service = build_service(config, SharedEncoder(lambda: None), accounts)  # type: ignore[arg-type]
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler_for_service(service))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -232,7 +233,7 @@ def test_app_posts_still_need_the_page_token(hosted) -> None:
     assert status == HTTPStatus.FORBIDDEN
 
 
-def test_sorting_is_refused_on_the_web(hosted) -> None:
+def test_album_writes_are_refused_on_the_web(hosted) -> None:
     port, _, _ = hosted
     _, headers, _ = _sign_in(port)
     cookie = _cookie(headers)
@@ -244,7 +245,7 @@ def test_sorting_is_refused_on_the_web(hosted) -> None:
         "Origin": ORIGIN,
         "X-Loupe-Token": token,
     }
-    status, _, _ = _call(port, "POST", "/api/library/sort", b"{}", request)
+    status, _, _ = _call(port, "POST", "/api/library/albums", b"{}", request)
     assert status == HTTPStatus.NOT_FOUND
 
 
@@ -325,9 +326,40 @@ def test_gate_entry_expires() -> None:
 
 
 def test_accounts_get_separate_folders(tmp_path: Path) -> None:
-    tenants = Tenants(tmp_path, "https://server.test", SharedTextEncoder(lambda: None))
+    tenants = Tenants(tmp_path, "https://server.test", SharedEncoder(lambda: None))
     first = tenants.get("One@Example.com")
     second = tenants.get("two@example.com")
     assert first.root != second.root
     assert tenants.get("one@example.com") is first
     assert "example" not in first.root.name
+
+
+def _phone_items(*uuids: str) -> bytes:
+    items = [{"uuid": uuid, "media_type": "photo", "albums": ["CC Travel"]} for uuid in uuids]
+    return gzip.compress(json.dumps({"items": items}).encode())
+
+
+def test_phone_items_build_the_account_library(hosted) -> None:
+    port, accounts, root = hosted
+    _sign_in(port)
+    token = next(iter(accounts.tokens))
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/gzip"}
+    uuid = "00000000-0000-4000-8000-000000000001"
+    status, _, reply = _call(port, "PUT", "/sync/v1/items", _phone_items(uuid), headers)
+    assert status == HTTPStatus.OK, reply
+    assert json.loads(reply) == {"items": 1}
+    status, _, reply = _call(port, "GET", "/sync/v1/previews/missing", headers=headers)
+    assert json.loads(reply) == {"missing": [uuid]}
+    status, _, reply = _call(port, "GET", "/sync/v1/sort", headers=headers)
+    assert status == HTTPStatus.OK
+    assert json.loads(reply)["items"] == 1
+
+
+def test_phone_items_must_be_valid(hosted) -> None:
+    port, accounts, _ = hosted
+    _sign_in(port)
+    token = next(iter(accounts.tokens))
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/gzip"}
+    body = gzip.compress(b'{"items": [{"uuid": "nope", "media_type": "photo"}]}')
+    status, _, _ = _call(port, "PUT", "/sync/v1/items", body, headers)
+    assert status == HTTPStatus.BAD_REQUEST

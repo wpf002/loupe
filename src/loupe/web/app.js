@@ -327,7 +327,6 @@ function pillarTable(status) {
 }
 
 function libraryActions(panel, status, sync) {
-  if (mode === "hosted") return [];
   const syncButton = sync ? syncControl(panel, status, sync) : null;
   const running = RUNNING_STAGES.includes(status.stage);
   const toAdd = status.pillars.reduce((sum, row) => sum + row.to_add, 0);
@@ -348,7 +347,8 @@ function libraryActions(panel, status, sync) {
   sort.disabled = running || !status.pillars.length;
   addToPhotos.disabled = running || !toAdd;
   addToPhotos.title = toAdd ? `Adds to albums in the Loupe folder` : "Nothing new to add";
-  return [syncButton, sort, status.sorted ? addToPhotos : null].filter(Boolean);
+  const canAdd = status.sorted && mode !== "hosted";
+  return [syncButton, sort, canAdd ? addToPhotos : null].filter(Boolean);
 }
 
 const SYNC_STAGES = ["library", "settings", "previews", "vectors"];
@@ -376,10 +376,15 @@ async function renderLibrary(panel) {
   const stats = h("dl", { class: "stats" },
     [["Items", status.items], ["Read", status.embedded], ["Pillars", status.pillars.length]].map(([label, value]) =>
       h("div", {}, h("dt", { class: "label", text: label }), h("dd", { text: count(value) }))));
-  const body = status.pillars.length
+  const noPhotos = mode === "hosted" && !status.items;
+  let body = status.pillars.length
     ? pillarTable(status)
     : emptyState("No Pillar Albums", "CC Travel", null);
   if (!status.pillars.length) body.title = "Albums named with CC at the start become pillars";
+  if (noPhotos) {
+    body = emptyState("No Photos Yet", "Loupe for iPhone · Loupe for Mac", null);
+    body.title = "Sign in to Loupe on your iPhone or Mac and allow Photos. Your library syncs here.";
+  }
   panel.replaceChildren(...[
     head("Library", ...libraryActions(panel, status, sync)),
     status.stage === "failed" && status.error ? alertBox(status.error) : null,

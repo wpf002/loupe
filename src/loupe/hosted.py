@@ -18,7 +18,7 @@ import secrets
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
@@ -29,6 +29,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
+from PIL import Image
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from loupe.account import AccountClient, AccountError, SignedIn, validate_server_url
@@ -50,9 +51,10 @@ from loupe.server import (
     public_hostname,
 )
 from loupe.settings import DEFAULT_ALBUM_FOLDER, Settings
-from loupe.sorting import SortError
+from loupe.sorting import Sorter, SortError
 from loupe.studio import NO_BRAND, Studio, StudioError, claude_client, search_planner
 from loupe.sync_index import SyncIndexError, import_index
+from loupe.sync_phone import PhoneSyncError, import_phone_items
 from loupe.sync_store import (
     BRAND_FILE,
     FONT_SUFFIXES,
@@ -91,7 +93,9 @@ DEFAULT_PAGE = 500
 LOGIN_PAGE = "login.html"
 OPEN_STATIC = frozenset({"theme.css", "app.css", "login.js"})
 SIGNED_OUT = "Sign in again"
-NO_SORTING = "Sorting runs in Loupe.app on your Mac"
+NO_ALBUM_WRITES = "Add To Photos runs in Loupe on your Mac"
+MAX_PHONE_UPLOAD = 64 * 1024 * 1024
+MAX_PHONE_JSON = 256 * 1024 * 1024
 
 logger = logging.getLogger("loupe.hosted")
 
@@ -150,8 +154,12 @@ def request_client_factory(server_url: str) -> Callable[[], StructuredClient]:
     return build
 
 
-class SharedTextEncoder:
-    """One SigLIP text tower for every account. Search only encodes text on the server."""
+class SharedEncoder:
+    """One SigLIP model for every account, on CPU. One encode runs at a time.
+
+    Search encodes text. Sorting a phone library encodes its previews, since the phone
+    can't run SigLIP and sends no vectors.
+    """
 
     def __init__(self, build: Callable[[], Any]) -> None:
         self._build = build
@@ -170,16 +178,22 @@ class SharedTextEncoder:
 
         return MODEL_ID
 
+    @property
+    def dim(self) -> int:
+        return int(self._instance().dim)
+
     def encode_texts(self, texts: list[str]) -> np.ndarray:
         encoder = self._instance()
         with self._lock:
             return encoder.encode_texts(texts)
 
-    def encode(self, _batch: object) -> np.ndarray:
-        raise SortError(NO_SORTING)
+    def encode(self, batch: Sequence[Any]) -> np.ndarray:
+        encoder = self._instance()
+        with self._lock:
+            return encoder.encode(batch)
 
-    def preprocess(self, _image: object) -> object:
-        raise SortError(NO_SORTING)
+    def preprocess(self, image: Image.Image) -> Any:
+        return self._instance().preprocess(image)
 
     def preload(self) -> threading.Thread:
         def load() -> None:
@@ -194,14 +208,14 @@ class SharedTextEncoder:
         return thread
 
 
-def cpu_text_encoder() -> Any:
+def cpu_encoder() -> Any:
     from loupe.encoder import SiglipEncoder
 
-    return SiglipEncoder(device="cpu", precision="bf16", text_only=True)
+    return SiglipEncoder(device="cpu", precision="bf16")
 
 
 def refusing_writer() -> Any:
-    raise SortError(NO_SORTING)
+    raise SortError(NO_ALBUM_WRITES)
 
 
 def account_key(email: str) -> str:
@@ -247,7 +261,7 @@ class Tenant:
     email: str
     root: Path
     server_url: str
-    encoder: SharedTextEncoder
+    encoder: SharedEncoder
     csrf: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     sync_lock: threading.Lock = field(default_factory=threading.Lock)
     _app_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -290,8 +304,6 @@ class Tenant:
             self._app = None
 
     def _build(self) -> App:
-        from loupe.sorting import Sorter
-
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.config_dir.mkdir(parents=True, exist_ok=True)
         settings = self.settings
@@ -318,7 +330,7 @@ class Tenant:
 
 
 class Tenants:
-    def __init__(self, root: Path, server_url: str, encoder: SharedTextEncoder) -> None:
+    def __init__(self, root: Path, server_url: str, encoder: SharedEncoder) -> None:
         self._root = root / "accounts"
         self._server_url = server_url
         self._encoder = encoder
@@ -569,7 +581,7 @@ class HostedHandler(LoupeHandler):
         query = parse_qs(parts.query)
         try:
             return self._sync_route(tenant, route, query)
-        except (SyncStoreError, SyncIndexError) as error:
+        except (SyncStoreError, SyncIndexError, PhoneSyncError) as error:
             raise HttpError(HTTPStatus.BAD_REQUEST, str(error)) from error
 
     def _sync_route(
@@ -587,6 +599,12 @@ class HostedHandler(LoupeHandler):
             return {"missing": missing_vectors(tenant.settings.index_path, after, limit)}
         if method == "PUT" and path == "index":
             return self._sync_index(tenant)
+        if method == "PUT" and path == "items":
+            return self._sync_phone_items(tenant)
+        if method == "POST" and path == "sort":
+            return self._start_sort(tenant)
+        if method == "GET" and path == "sort":
+            return _sort_progress(_sorter(tenant).status())
         if method == "PUT" and path.startswith("previews/"):
             uuid = check_uuid(path.removeprefix("previews/"))
             body = self._raw_body(MAX_PREVIEW_UPLOAD)
@@ -621,6 +639,37 @@ class HostedHandler(LoupeHandler):
         length = self._content_length(limit)
         return self.rfile.read(length) if length > 0 else b""
 
+    def _sync_phone_items(self, tenant: Tenant) -> Json:
+        length = self._content_length(MAX_PHONE_UPLOAD)
+        tenant.data_dir.mkdir(parents=True, exist_ok=True)
+        packed = tenant.data_dir / ".upload.json.gz"
+        unpacked = tenant.data_dir / ".upload.json"
+        with tenant.sync_lock:
+            try:
+                _copy_exact(self.rfile, packed, length)
+                _gunzip_capped(packed, unpacked, MAX_PHONE_JSON)
+                exclusions = load_hosted_pillars(tenant.config_dir).exclusions
+                items = import_phone_items(
+                    tenant.settings.index_path,
+                    unpacked.read_bytes(),
+                    tenant.previews_dir,
+                    exclusions,
+                )
+            finally:
+                packed.unlink(missing_ok=True)
+                unpacked.unlink(missing_ok=True)
+        tenant.invalidate()
+        logger.info("phone library synced: %d items", items)
+        return {"items": items}
+
+    def _start_sort(self, tenant: Tenant) -> Json:
+        try:
+            _sorter(tenant).start_sort()
+        except SortError as error:
+            raise HttpError(error.status, str(error)) from error
+        logger.info("sort started")
+        return {"ok": True}
+
     def _sync_index(self, tenant: Tenant) -> Json:
         length = self._content_length(MAX_INDEX_UPLOAD)
         tenant.data_dir.mkdir(parents=True, exist_ok=True)
@@ -637,6 +686,18 @@ class HostedHandler(LoupeHandler):
         tenant.invalidate()
         logger.info("index synced: %d items", items)
         return {"items": items}
+
+
+def _sorter(tenant: Tenant) -> Sorter:
+    sorter = tenant.app().sorter
+    if sorter is None:
+        raise HttpError(HTTPStatus.SERVICE_UNAVAILABLE, "Sorting isn't available")
+    return sorter
+
+
+def _sort_progress(status: dict[str, object]) -> Json:
+    keys = ("stage", "done", "total", "error", "items", "embedded", "sorted")
+    return {key: status[key] for key in keys}
 
 
 def _page_limit(query: dict[str, list[str]]) -> int:
@@ -684,7 +745,7 @@ def handler_for_service(service: Service) -> type[HostedHandler]:
 
 
 def build_service(
-    config: HostedConfig, encoder: SharedTextEncoder, accounts: AccountClient | None = None
+    config: HostedConfig, encoder: SharedEncoder, accounts: AccountClient | None = None
 ) -> Service:
     client = accounts or AccountClient(config.server_url)
     return Service(
@@ -700,7 +761,7 @@ def run(env: dict[str, str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     config = HostedConfig.from_env(dict(os.environ if env is None else env))
     config.root.mkdir(parents=True, exist_ok=True)
-    encoder = SharedTextEncoder(cpu_text_encoder)
+    encoder = SharedEncoder(cpu_encoder)
     encoder.preload()
     handler = handler_for_service(build_service(config, encoder))
     # Railway routes the public domain to this port inside the container.
