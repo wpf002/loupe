@@ -14,9 +14,11 @@ from loupe.index import connect, upsert_excluded, upsert_item
 from loupe.models import ExclusionReason
 from loupe.server import TOKEN_HEADER, App, HttpError, make_server, parse_range
 from loupe.settings import Settings
+from loupe.sorting import Sorter
 from loupe.studio import Studio
 from loupe.week import DAYS, PlannedPost, PlannedWeek, PostFormat, WeekPlan, save_week
 from tests.fixtures import UUID_A, UUID_B, make_brand, make_item
+from tests.test_sorting import CONFIG, FakeEncoder, RecordingWriter, _library, _wait
 
 MONDAY = date(2026, 11, 16)
 
@@ -156,7 +158,13 @@ def test_thumbnail_only_for_eligible_items(running: Running) -> None:
 def test_state_and_brand(running: Running) -> None:
     status, _, body = running.request("GET", "/api/state")
     assert status == 200
-    assert json.loads(body) == {"brand": "Test Studio", "takes": 0, "week": None, "busy": False}
+    assert json.loads(body) == {
+        "brand": "Test Studio",
+        "takes": 0,
+        "week": None,
+        "busy": False,
+        "library": False,
+    }
     brand = json.loads(running.request("GET", "/api/brand")[2])
     assert brand["colors"]["accent"] == "#A8681A"
     assert brand["voice"]["comment_word"] == "GUIDE"
@@ -207,3 +215,58 @@ def test_range_request_returns_partial_content(running: Running) -> None:
     assert status == 206
     assert len(body) == 10
     assert headers["Content-Range"].startswith("bytes 0-9/")
+
+
+@pytest.fixture
+def sorting(tmp_path: Path) -> Iterator[Running]:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        photos_library=None,
+        album_folder="Loupe",
+        owner_macos_user="nobody",
+    )
+    settings.data_dir.mkdir()
+    index_path = _library(tmp_path)
+    sorter = Sorter(settings.data_dir, index_path, CONFIG, FakeEncoder, RecordingWriter)
+    studio = Studio(settings, make_brand(tmp_path), _no_client, _planner, _no_original)
+    app = App(studio, sorter=sorter)
+    port = _free_port()
+    server = make_server(app, port)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield Running(app, port)
+    server.shutdown()
+    server.server_close()
+
+
+def _json(response: tuple[int, dict, bytes]) -> tuple[int, dict]:
+    status, _, data = response
+    return status, json.loads(data)
+
+
+def test_library_routes_are_absent_without_a_sorter(running: Running) -> None:
+    assert _json(running.request("GET", "/api/state"))[1]["library"] is False
+    assert running.request("GET", "/api/library")[0] == 404
+    assert running.post("/api/library/sort", {})[0] == 404
+
+
+def test_sort_then_search_over_http(sorting: Running) -> None:
+    assert _json(sorting.request("GET", "/api/state"))[1]["library"] is True
+    status, body = _json(sorting.request("GET", "/api/library"))
+    assert (status, body["sorted"], len(body["pillars"])) == (200, False, 2)
+    assert sorting.request("GET", "/api/search?q=red")[0] == 400
+    status, body = _json(sorting.post("/api/library/sort", {}))
+    assert status == 200
+    _wait(sorting.app.sorter)
+    status, body = _json(sorting.request("GET", "/api/search?q=red&media=photo&pillar=CC+Travel"))
+    assert status == 200
+    assert body["hits"] and set(body["hits"][0]) == {"uuid", "media_type"}
+
+
+def test_library_jobs_need_the_token(sorting: Running) -> None:
+    assert sorting.post("/api/library/sort", {}, **{TOKEN_HEADER: "wrong"})[0] == 403
+    assert sorting.post("/api/library/albums", {})[0] == 400
+
+
+def test_search_needs_query_text(sorting: Running) -> None:
+    assert sorting.request("GET", "/api/search?q=%20")[0] == 400
+    assert sorting.request("GET", "/api/search?q=" + "a" * 201)[0] == 400

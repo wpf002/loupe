@@ -30,6 +30,13 @@ URL_PREFIX = "LOUPE_URL "
 HOST = "127.0.0.1"
 NO_PILLARS = "No pillars yet. Add pillars.toml to the Loupe config folder."
 NO_ORIGINALS = "Reels need the original video, which Loupe.app can't open yet."
+# A new user has no pillars.toml. Her "CC " albums are the pillars, with the repo defaults.
+DEFAULT_PILLARS = PillarConfig(
+    label_album_prefixes=("CC ",),
+    min_confidence=0.80,
+    review_floor=0.50,
+    min_examples_per_pillar=30,
+)
 
 logger = logging.getLogger("loupe.mac")
 
@@ -135,9 +142,12 @@ def stop_on_eof(stream: TextIO, stop: Callable[[], None]) -> threading.Thread:
 def run(server_url: str, port: int | None = None, root: Path = APP_SUPPORT) -> None:
     """Build everything for the signed-in macOS user, print the URL, serve."""
     from loupe.account import AccountClient, KeychainTokenStore, Session
+    from loupe.encoder import SiglipEncoder
     from loupe.onboarding import Onboarding, photokit_port, proxy_client_factory
+    from loupe.photokit import PhotoKitWriter
     from loupe.server import App, make_server
     from loupe.settings import current_macos_user
+    from loupe.sorting import Sorter
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     paths = app_paths(root)
@@ -154,8 +164,15 @@ def run(server_url: str, port: int | None = None, root: Path = APP_SUPPORT) -> N
         proxy_client_factory(server_url, session),
     )
     onboarding = Onboarding(session, photokit_port(), paths.data_dir, user, exclusions_for(pillars))
+    sorter = Sorter(
+        paths.data_dir,
+        onboarding.index_path,
+        pillars or DEFAULT_PILLARS,
+        SiglipEncoder,
+        lambda: PhotoKitWriter(settings.album_folder, paths.data_dir, user),
+    )
     chosen = port or free_port()
-    server = make_server(App(studio, onboarding=onboarding), chosen)
+    server = make_server(App(studio, onboarding=onboarding, sorter=sorter), chosen)
     stop_on_eof(sys.stdin, server.shutdown)
     print(f"{URL_PREFIX}http://{HOST}:{chosen}/", flush=True)  # noqa: T201 - read by the launcher
     logger.info("serving on port %d", chosen)

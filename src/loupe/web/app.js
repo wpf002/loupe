@@ -1,7 +1,9 @@
 "use strict";
 
 const TOKEN = document.querySelector('meta[name="loupe-token"]').content;
-const TABS = ["brand", "hooks", "week", "everything"];
+const ALL_TABS = ["library", "search", "brand", "hooks", "week", "everything"];
+const LIBRARY_TABS = ["library", "search"];
+let tabs = ALL_TABS.filter((tab) => !LIBRARY_TABS.includes(tab));
 const DEFAULT_LENGTH = 30;
 const TOAST_MS = 1800;
 
@@ -280,12 +282,166 @@ async function renderEverything(panel) {
       letter));
 }
 
+/* Library: embed, train and score in one job, then add confident picks to Photos. */
+const LIBRARY_POLL_MS = 1000;
+const RUNNING_STAGES = ["embed", "train", "classify", "albums"];
+const STAGE_LABELS = { embed: "Reading Photos", train: "Training", classify: "Scoring", albums: "Adding To Photos" };
+let confirmAdd = false;
+
+function percent(value) {
+  return value === null ? "–" : `${Math.round(value * 100)}%`;
+}
+
+function stageMeter(status) {
+  const fill = h("span");
+  const known = status.total > 0;
+  if (known) fill.style.transform = `scaleX(${Math.min(1, status.done / status.total)})`;
+  return h("div", { class: "progress" },
+    h("div", { class: "row" },
+      h("span", { class: "label", text: STAGE_LABELS[status.stage] }),
+      known ? h("span", { class: "mono", text: `${count(status.done)} / ${count(status.total)}` }) : null),
+    h("div", { class: known ? "meter known" : "meter", role: "progressbar", "aria-label": STAGE_LABELS[status.stage],
+      "aria-valuemin": known ? "0" : null, "aria-valuemax": known ? String(status.total) : null,
+      "aria-valuenow": known ? String(status.done) : null }, fill));
+}
+
+function pillarTable(status) {
+  const cell = (value, trained) => h("td", { class: "number", text: trained ? count(value) : "–" });
+  return h("div", { class: "card table-wrap" }, h("table", { class: "pillar-table" },
+    h("thead", {}, h("tr", {}, ["Pillar", "Examples", "Precision", "Confident", "Borderline", "In Photos", "To Add"]
+      .map((title, index) => h("th", { scope: "col", class: index ? "number" : null, text: title })))),
+    h("tbody", {}, status.pillars.map((row) => h("tr", {},
+      h("th", { scope: "row", text: row.album }),
+      h("td", { class: "number" }, count(row.examples),
+        row.examples < status.min_examples
+          ? h("span", { class: "short", title: `Needs ${status.min_examples} to sort`, text: ` / ${status.min_examples}` })
+          : null),
+      h("td", { class: "number", text: percent(row.precision) }),
+      cell(row.confident, row.trained),
+      cell(row.borderline, row.trained),
+      cell(row.in_album, row.trained),
+      h("td", { class: row.to_add ? "number add" : "number", text: row.trained ? count(row.to_add) : "–" }))))));
+}
+
+function libraryActions(panel, status) {
+  const running = RUNNING_STAGES.includes(status.stage);
+  const toAdd = status.pillars.reduce((sum, row) => sum + row.to_add, 0);
+  if (confirmAdd && !running && toAdd) {
+    const add = button(`Add ${count(toAdd)}`, async () => {
+      confirmAdd = false;
+      const result = await busy(add, panel, () => api("POST", "/api/library/albums"));
+      if (result) renderLibrary(panel);
+    }, true);
+    return [button("Cancel", () => { confirmAdd = false; renderLibrary(panel); }), add];
+  }
+  confirmAdd = false;
+  const sort = button(status.sorted ? "Resort" : "Sort", async () => {
+    const result = await busy(sort, panel, () => api("POST", "/api/library/sort"));
+    if (result) renderLibrary(panel);
+  }, !status.sorted);
+  const addToPhotos = button("Add To Photos", () => { confirmAdd = true; renderLibrary(panel); }, status.sorted);
+  sort.disabled = running || !status.pillars.length;
+  addToPhotos.disabled = running || !toAdd;
+  addToPhotos.title = toAdd ? `Adds to albums in the Loupe folder` : "Nothing new to add";
+  return status.sorted ? [sort, addToPhotos] : [sort];
+}
+
+async function renderLibrary(panel) {
+  const status = await api("GET", "/api/library");
+  if (panel.hidden) return;
+  const running = RUNNING_STAGES.includes(status.stage);
+  const stats = h("dl", { class: "stats" },
+    [["Items", status.items], ["Read", status.embedded], ["Pillars", status.pillars.length]].map(([label, value]) =>
+      h("div", {}, h("dt", { class: "label", text: label }), h("dd", { text: count(value) }))));
+  const body = status.pillars.length
+    ? pillarTable(status)
+    : emptyState("No Pillar Albums", "CC Travel", null);
+  if (!status.pillars.length) body.title = "Albums named with CC at the start become pillars";
+  panel.replaceChildren(...[
+    head("Library", ...libraryActions(panel, status)),
+    status.stage === "failed" && status.error ? alertBox(status.error) : null,
+    running ? stageMeter(status) : null,
+    stats,
+    body,
+  ].filter(Boolean));
+  clearTimeout(renderLibrary.timer);
+  if (running) renderLibrary.timer = setTimeout(() => { if (!panel.hidden) renderLibrary(panel).catch(() => {}); }, LIBRARY_POLL_MS);
+}
+
+/* Search: text query over the embeddings, with pillar, type and facet filters. */
+const FACET_OPTIONS = {
+  light: [["natural", "Natural"], ["artificial", "Artificial"]],
+  shot: [["close-up", "Close-Up"], ["medium", "Medium"], ["wide", "Wide"], ["selfie", "Selfie"]],
+  setting: [["indoor", "Indoor"], ["outdoor", "Outdoor"]],
+};
+const searchState = { q: "", pillar: "", media: "", light: "", shot: "", setting: "", hits: null };
+
+function choice(label, name, options) {
+  const id = `search-${name}`;
+  const select = h("select", { id, name },
+    h("option", { value: "", text: "Any" }),
+    options.map(([value, text]) => h("option", { value, text, selected: searchState[name] === value })));
+  return h("div", { class: "field" }, h("label", { class: "label", for: id, text: label }), select);
+}
+
+function drawHits(results) {
+  const hits = searchState.hits;
+  if (hits === null) { results.replaceChildren(); return; }
+  if (!hits.length) { results.replaceChildren(emptyState("No Matches", null, null)); return; }
+  results.replaceChildren(
+    h("div", { class: "label", text: `${count(hits.length)} Results` }),
+    h("div", { class: "thumbs grid" }, hits.map((hit) => h("figure", {},
+      h("img", { src: `/media/thumb/${hit.uuid}`, alt: "", loading: "lazy" }),
+      hit.media_type === "video" ? h("span", { class: "kind", text: "Video" }) : null))));
+}
+
+async function renderSearch(panel) {
+  const status = await api("GET", "/api/library");
+  if (!status.sorted) {
+    panel.replaceChildren(head("Search"), emptyState("Not Sorted", null,
+      button("Open Library", () => { location.hash = "#library"; }, true)));
+    return;
+  }
+  const results = h("div", { class: "results", "aria-live": "polite" });
+  const submit = h("button", { class: "button primary", type: "submit" }, "Search");
+  const form = h("form", { class: "search", role: "search" },
+    h("div", { class: "field query" },
+      h("label", { class: "label", for: "search-q", text: "Search" }),
+      h("input", { id: "search-q", name: "q", type: "search", required: true, maxlength: "200",
+        autocomplete: "off", value: searchState.q })),
+    choice("Pillar", "pillar", status.pillars.filter((row) => row.trained).map((row) => [row.pillar, row.album])),
+    choice("Type", "media", [["photo", "Photos"], ["video", "Videos"]]),
+    choice("Light", "light", FACET_OPTIONS.light),
+    choice("Shot", "shot", FACET_OPTIONS.shot),
+    choice("Setting", "setting", FACET_OPTIONS.setting),
+    submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form));
+    Object.assign(searchState, values);
+    const params = new URLSearchParams(Object.entries(values).filter(([, value]) => value));
+    const found = await busy(submit, panel, () => api("GET", `/api/search?${params}`));
+    if (found) { searchState.hits = found.hits; drawHits(results); }
+  });
+  panel.replaceChildren(head("Search"), form, results);
+  drawHits(results);
+  form.querySelector("input").focus();
+}
+
 /* Tabs */
-const RENDERERS = { brand: renderBrand, hooks: renderHooks, week: renderWeek, everything: renderEverything };
+const RENDERERS = {
+  library: renderLibrary, search: renderSearch,
+  brand: renderBrand, hooks: renderHooks, week: renderWeek, everything: renderEverything,
+};
+
+function setTabs(library) {
+  tabs = library ? ALL_TABS : ALL_TABS.filter((tab) => !LIBRARY_TABS.includes(tab));
+  for (const tab of ALL_TABS) document.getElementById(`tab-${tab}`).hidden = !tabs.includes(tab);
+}
 
 async function show(name) {
-  const tab = TABS.includes(name) ? name : "brand";
-  for (const other of TABS) {
+  const tab = tabs.includes(name) ? name : tabs[0];
+  for (const other of ALL_TABS) {
     const control = document.getElementById(`tab-${other}`);
     control.setAttribute("aria-selected", other === tab ? "true" : "false");
     control.tabIndex = other === tab ? 0 : -1;
@@ -309,8 +465,8 @@ function wireTabs() {
   list.addEventListener("keydown", (event) => {
     const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
     if (!step) return;
-    const current = TABS.indexOf(location.hash.slice(1) || "brand");
-    const next = TABS[(current + step + TABS.length) % TABS.length];
+    const current = Math.max(0, tabs.indexOf(location.hash.slice(1)));
+    const next = tabs[(current + step + tabs.length) % tabs.length];
     location.hash = `#${next}`;
     document.getElementById(`tab-${next}`).focus();
   });
@@ -323,6 +479,7 @@ async function loadState(setup) {
   const who = document.getElementById("who");
   try {
     const state = await api("GET", "/api/state");
+    setTabs(state.library);
     const parts = [state.brand, `${state.takes} Takes`].filter(Boolean);
     if (state.week) parts.push(`Week of ${weekLabel(state.week)}`);
     who.replaceChildren(h("span", { text: parts.join(" · ") }));
@@ -447,10 +604,10 @@ async function pollSetup() {
   }
 }
 
-function enterStudio(setup) {
+async function enterStudio(setup) {
   document.getElementById("setup").hidden = true;
+  await loadState(setup);
   document.querySelector(".tabs").hidden = false;
-  loadState(setup);
   show(location.hash.slice(1));
 }
 

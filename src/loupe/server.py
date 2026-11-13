@@ -27,6 +27,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from loupe.index import connect, is_eligible
 from loupe.onboarding import Onboarding, SetupError
+from loupe.search import Facet
+from loupe.sorting import Sorter, SortError
 from loupe.studio import (
     Studio,
     StudioError,
@@ -69,6 +71,8 @@ SECURITY_HEADERS = {
 }
 MAX_EMAIL_LENGTH = 320
 MAX_PASSWORD_LENGTH = 1024
+LIBRARY_JOBS = frozenset({"/api/library/sort", "/api/library/albums"})
+MAX_SEARCH_LENGTH = 200
 OPEN_PATHS = frozenset({"/", "/api/setup", "/fonts/display", "/fonts/body"})
 MIN_REEL_SECONDS = 5.0
 MAX_REEL_SECONDS = 90.0
@@ -102,6 +106,7 @@ class App:
     token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     busy: threading.Lock = field(default_factory=threading.Lock)
     onboarding: Onboarding | None = None
+    sorter: Sorter | None = None
 
     def _require_setup(self, path: str) -> None:
         """In Loupe.app nothing past setup is served until sign-in, Photos and a scan are done."""
@@ -137,6 +142,8 @@ class App:
             "/api/takes": self.takes,
             "/api/week": lambda: self.week(_first(query, "start")),
             "/api/everything": lambda: self.everything(_first(query, "start")),
+            "/api/library": lambda: self._sort_call(lambda sorter: sorter.status()),
+            "/api/search": lambda: self.search(query),
         }
         if path in routes:
             return routes[path]()
@@ -149,6 +156,8 @@ class App:
         self._require_setup(path)
         if path.startswith("/api/setup/"):
             return self.setup_step(path.removeprefix("/api/setup/"), body)
+        if path in LIBRARY_JOBS:
+            return self.library_job(path, body)
         if not self.busy.acquire(blocking=False):
             raise HttpError(HTTPStatus.CONFLICT, "Another job is running")
         try:
@@ -164,6 +173,41 @@ class App:
             raise HttpError(HTTPStatus.NOT_FOUND, "Not found")
         finally:
             self.busy.release()
+
+    def _sort_call[T](self, action: Callable[[Sorter], T]) -> T:
+        if self.sorter is None:
+            raise HttpError(HTTPStatus.NOT_FOUND, "Not found")
+        try:
+            return action(self.sorter)
+        except SortError as error:
+            raise HttpError(error.status, str(error)) from error
+
+    def library_job(self, path: str, body: Json) -> Json:
+        """Sorting runs in its own thread and lock, so the other tabs stay usable meanwhile."""
+
+        def start(sorter: Sorter) -> Json:
+            if path == "/api/library/sort":
+                sorter.start_sort(_optional_limit(body))
+            else:
+                sorter.start_albums()
+            return sorter.status()
+
+        return self._sort_call(start)
+
+    def search(self, query: dict[str, list[str]]) -> Json:
+        text = (_first(query, "q") or "").strip()
+        if not text or len(text) > MAX_SEARCH_LENGTH:
+            raise HttpError(HTTPStatus.BAD_REQUEST, "Type what to look for")
+        facets = {facet: value for facet in Facet if (value := _first(query, facet.value))}
+        pillar = _first(query, "pillar") or None
+        media_type = _first(query, "media") or None
+        hits = self._sort_call(
+            lambda sorter: [
+                {"uuid": hit.uuid, "media_type": hit.media_type}
+                for hit in sorter.search(text, pillar, media_type, facets)
+            ]
+        )
+        return {"hits": hits}
 
     def setup(self) -> Json:
         if self.onboarding is None:
@@ -241,6 +285,7 @@ class App:
             "takes": takes,
             "week": planned.start.isoformat() if planned else None,
             "busy": self.busy.locked(),
+            "library": self.sorter is not None,
         }
 
     def brand(self) -> Json:
