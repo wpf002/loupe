@@ -106,6 +106,7 @@ final class AppModel {
             sync = .uploadingLibrary(items: snapshot.items.count)
             let eligible = try await client.putItems(snapshot.items)
             let sent = try await uploadPreviews(client, snapshot: snapshot, eligible: eligible)
+            webRevision += 1
             try await sortIfNeeded(client, uploaded: sent)
             sync = .done(items: eligible)
             webRevision += 1
@@ -162,24 +163,20 @@ final class AppModel {
     private func sortIfNeeded(_ client: SyncClient, uploaded: Int) async throws {
         var status = try await client.sortStatus()
         let stale = uploaded > 0 || !status.sorted || status.embedded < status.items
-        var started = false
         if !status.isRunning && stale && status.items > 0 {
             do {
                 try await client.startSort()
-                started = true
             } catch let error as APIError where error.status == 409 {
                 // Another device started a sort. Follow that one.
             }
             status = try await client.sortStatus()
         }
+        // A failed Sort (for example, no pillar album has enough photos yet) isn't a failed
+        // sync. The web Library shows Sort's own status.
         while status.isRunning {
-            started = true
             sync = .sorting(status)
             try await Task.sleep(for: Self.sortPollInterval)
             status = try await client.sortStatus()
-        }
-        if started, status.stage == "failed" {
-            throw APIError(message: status.error ?? "Sort failed", status: nil)
         }
     }
 
