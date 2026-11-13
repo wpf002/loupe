@@ -33,3 +33,18 @@ Tests use a `loupe_test` database (override with `TEST_DATABASE_URL`).
 ```bash
 createdb loupe_test && pnpm test && pnpm lint
 ```
+
+## Deploy
+
+Railway project `loupe`, service `loupe-server`, with a Postgres service. Build, start,
+the pre-deploy migration and the `/health` check live in `.railway/railway.ts`.
+Variables are set on Railway, not in code: `ANTHROPIC_API_KEY`,
+`DATABASE_URL=${{Postgres.DATABASE_URL}}`, `TRUSTED_PROXY_HOPS=1`.
+
+```bash
+railway config plan && railway config apply
+railway up --service loupe-server --ci
+```
+
+Live at `https://loupe-server-production.up.railway.app`. Loupe.app reads this from
+`LOUPE_SERVER_URL` in the repo's `.env` when `scripts/build_app.sh` runs.
