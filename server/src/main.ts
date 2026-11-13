@@ -17,6 +17,7 @@ const app = buildApp({
   hasher: argon2Hasher,
   monthlyTokenCap: config.monthlyTokenCap,
   sessionDays: config.sessionDays,
+  trustedProxyHops: config.trustedProxyHops,
 });
 
 async function shutdown(signal: string): Promise<void> {

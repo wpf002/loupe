@@ -54,6 +54,8 @@ async function signUp(email = "owner@example.test"): Promise<string> {
   return response.json<{ token: string }>().token;
 }
 
+const AUTH_ATTEMPTS_PER_MINUTE = 10;
+
 function bearer(token: string) {
   return { authorization: `Bearer ${token}` };
 }
@@ -223,5 +225,34 @@ describe("health and config", () => {
     const config = loadConfig({ DATABASE_URL: "postgresql://localhost/loupe", ANTHROPIC_API_KEY: "test" });
     expect(config.port).toBe(8080);
     expect(config.monthlyTokenCap).toBe(3_000_000);
+    expect(config.trustedProxyHops).toBe(0);
+  });
+
+  it("rate limits each client IP behind one proxy hop", async () => {
+    const proxied = buildApp({
+      store: prismaStore(prisma),
+      claude,
+      hasher: argon2Hasher,
+      monthlyTokenCap: CAP,
+      sessionDays: 90,
+      trustedProxyHops: 1,
+      now: () => NOW,
+      logger: false,
+    });
+    const signIn = (client: string) =>
+      proxied.inject({
+        method: "POST",
+        url: "/v1/sessions",
+        remoteAddress: "10.0.0.1",
+        headers: { "x-forwarded-for": client },
+        payload: { email: "nobody@example.test", password: "short" },
+      });
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt <= AUTH_ATTEMPTS_PER_MINUTE; attempt++) {
+      statuses.push((await signIn("203.0.113.7")).statusCode);
+    }
+    expect(statuses.at(-1)).toBe(429);
+    expect((await signIn("203.0.113.8")).statusCode).not.toBe(429);
+    await proxied.close();
   });
 });

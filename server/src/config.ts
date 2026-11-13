@@ -3,6 +3,7 @@ import { z } from "zod";
 const DEFAULT_PORT = 8080;
 const DEFAULT_MONTHLY_TOKEN_CAP = 3_000_000;
 const DEFAULT_SESSION_DAYS = 90;
+const MAX_PROXY_HOPS = 5;
 
 const configSchema = z.object({
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
@@ -11,6 +12,7 @@ const configSchema = z.object({
   HOST: z.string().min(1).default("0.0.0.0"),
   MONTHLY_TOKEN_CAP: z.coerce.number().int().positive().default(DEFAULT_MONTHLY_TOKEN_CAP),
   SESSION_DAYS: z.coerce.number().int().positive().max(365).default(DEFAULT_SESSION_DAYS),
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(MAX_PROXY_HOPS).default(0),
 });
 
 export type Config = {
@@ -20,6 +22,7 @@ export type Config = {
   host: string;
   monthlyTokenCap: number;
   sessionDays: number;
+  trustedProxyHops: number;
 };
 
 /** Reads and validates the environment. Throws with every problem listed. */
@@ -37,5 +40,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     host: values.HOST,
     monthlyTokenCap: values.MONTHLY_TOKEN_CAP,
     sessionDays: values.SESSION_DAYS,
+    trustedProxyHops: values.TRUSTED_PROXY_HOPS,
   };
 }

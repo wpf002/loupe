@@ -20,6 +20,8 @@ export type AppDeps = {
   hasher: PasswordHasher;
   monthlyTokenCap: number;
   sessionDays: number;
+  /** Proxy hops in front of the server. Railway's edge is 1. Request IPs key the rate limits. */
+  trustedProxyHops?: number;
   now?: () => Date;
   logger?: boolean;
 };
@@ -43,8 +45,11 @@ function bearerToken(request: FastifyRequest): string | null {
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const now = deps.now ?? (() => new Date());
+  const proxyHops = deps.trustedProxyHops ?? 0;
   const app = Fastify({
     bodyLimit: DEFAULT_BODY_LIMIT_BYTES,
+    // Trust only the nearest proxies, so a client can't spoof its IP with its own X-Forwarded-For.
+    trustProxy: (_address: string, hop: number) => hop < proxyHops,
     logger:
       deps.logger === false
         ? false
