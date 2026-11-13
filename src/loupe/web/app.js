@@ -6,6 +6,8 @@ const LIBRARY_TABS = ["library", "search"];
 let tabs = ALL_TABS.filter((tab) => !LIBRARY_TABS.includes(tab));
 const DEFAULT_LENGTH = 30;
 const TOAST_MS = 1800;
+let mode = "app";
+let canSync = false;
 
 /* DOM builder. Text goes through textContent only, never innerHTML. */
 function h(tag, attrs = {}, ...children) {
@@ -32,6 +34,7 @@ async function api(method, path, body) {
     options.body = JSON.stringify(body || {});
   }
   const response = await fetch(path, options);
+  if (response.status === 401 && mode === "hosted") location.assign("/login");
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
   return payload;
@@ -292,15 +295,15 @@ function percent(value) {
   return value === null ? "–" : `${Math.round(value * 100)}%`;
 }
 
-function stageMeter(status) {
+function stageMeter(status, labels = STAGE_LABELS) {
   const fill = h("span");
   const known = status.total > 0;
   if (known) fill.style.transform = `scaleX(${Math.min(1, status.done / status.total)})`;
   return h("div", { class: "progress" },
     h("div", { class: "row" },
-      h("span", { class: "label", text: STAGE_LABELS[status.stage] }),
+      h("span", { class: "label", text: labels[status.stage] }),
       known ? h("span", { class: "mono", text: `${count(status.done)} / ${count(status.total)}` }) : null),
-    h("div", { class: known ? "meter known" : "meter", role: "progressbar", "aria-label": STAGE_LABELS[status.stage],
+    h("div", { class: known ? "meter known" : "meter", role: "progressbar", "aria-label": labels[status.stage],
       "aria-valuemin": known ? "0" : null, "aria-valuemax": known ? String(status.total) : null,
       "aria-valuenow": known ? String(status.done) : null }, fill));
 }
@@ -323,7 +326,9 @@ function pillarTable(status) {
       h("td", { class: row.to_add ? "number add" : "number", text: row.trained ? count(row.to_add) : "–" }))))));
 }
 
-function libraryActions(panel, status) {
+function libraryActions(panel, status, sync) {
+  if (mode === "hosted") return [];
+  const syncButton = sync ? syncControl(panel, status, sync) : null;
   const running = RUNNING_STAGES.includes(status.stage);
   const toAdd = status.pillars.reduce((sum, row) => sum + row.to_add, 0);
   if (confirmAdd && !running && toAdd) {
@@ -343,13 +348,31 @@ function libraryActions(panel, status) {
   sort.disabled = running || !status.pillars.length;
   addToPhotos.disabled = running || !toAdd;
   addToPhotos.title = toAdd ? `Adds to albums in the Loupe folder` : "Nothing new to add";
-  return status.sorted ? [sort, addToPhotos] : [sort];
+  return [syncButton, sort, status.sorted ? addToPhotos : null].filter(Boolean);
 }
 
+const SYNC_STAGES = ["library", "settings", "previews", "vectors"];
+const SYNC_LABELS = { library: "Sending Library", settings: "Sending Settings", previews: "Sending Previews", vectors: "Sending Search Data" };
+
+function syncControl(panel, status, sync) {
+  const control = button("Sync", async () => {
+    const result = await busy(control, panel, () => api("POST", "/api/library/sync"));
+    if (result) renderLibrary(panel);
+  });
+  control.disabled = SYNC_STAGES.includes(sync.stage) || RUNNING_STAGES.includes(status.stage) || !status.items;
+  control.title = sync.url || "";
+  return control;
+}
+
+
 async function renderLibrary(panel) {
-  const status = await api("GET", "/api/library");
+  const [status, sync] = await Promise.all([
+    api("GET", "/api/library"),
+    canSync ? api("GET", "/api/sync") : Promise.resolve(null),
+  ]);
   if (panel.hidden) return;
-  const running = RUNNING_STAGES.includes(status.stage);
+  const syncing = Boolean(sync && SYNC_STAGES.includes(sync.stage));
+  const running = RUNNING_STAGES.includes(status.stage) || syncing;
   const stats = h("dl", { class: "stats" },
     [["Items", status.items], ["Read", status.embedded], ["Pillars", status.pillars.length]].map(([label, value]) =>
       h("div", {}, h("dt", { class: "label", text: label }), h("dd", { text: count(value) }))));
@@ -358,9 +381,11 @@ async function renderLibrary(panel) {
     : emptyState("No Pillar Albums", "CC Travel", null);
   if (!status.pillars.length) body.title = "Albums named with CC at the start become pillars";
   panel.replaceChildren(...[
-    head("Library", ...libraryActions(panel, status)),
+    head("Library", ...libraryActions(panel, status, sync)),
     status.stage === "failed" && status.error ? alertBox(status.error) : null,
-    running ? stageMeter(status) : null,
+    sync && sync.stage === "failed" && sync.error ? alertBox(sync.error) : null,
+    RUNNING_STAGES.includes(status.stage) ? stageMeter(status) : null,
+    syncing ? stageMeter(sync, SYNC_LABELS) : null,
     stats,
     body,
   ].filter(Boolean));
@@ -479,6 +504,7 @@ async function loadState(setup) {
   const who = document.getElementById("who");
   try {
     const state = await api("GET", "/api/state");
+    canSync = Boolean(state.sync);
     setTabs(state.library);
     const parts = [state.brand, `${state.takes} Takes`].filter(Boolean);
     if (state.week) parts.push(`Week of ${weekLabel(state.week)}`);
@@ -486,7 +512,7 @@ async function loadState(setup) {
   } catch (error) {
     who.replaceChildren(h("span", { text: "Offline" }));
   }
-  if (setup.mode === "app" && setup.account) {
+  if ((setup.mode === "app" || setup.mode === "hosted") && setup.account) {
     who.append(h("span", { text: setup.account.email }), button("Sign Out", signOut));
   }
 }
@@ -494,11 +520,12 @@ async function loadState(setup) {
 async function signOut(event) {
   event.currentTarget.disabled = true;
   try {
-    await api("POST", "/api/setup/sign-out");
+    await api("POST", mode === "hosted" ? "/auth/sign-out" : "/api/setup/sign-out");
   } catch (error) {
     toast(error.message);
   }
-  location.reload();
+  if (mode === "hosted") location.assign("/login");
+  else location.reload();
 }
 
 /* Setup: Loupe.app first run. Account, then Photos, then Library. */
@@ -616,6 +643,7 @@ async function boot() {
   let setup;
   try {
     setup = await api("GET", "/api/setup");
+    mode = setup.mode;
   } catch (error) {
     const panel = document.getElementById("setup");
     panel.replaceChildren(alertBox(error.message));

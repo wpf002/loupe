@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+.venv
+data
+build
+server
+macapp
+tests
+docs
+config/*.local.toml
+**/__pycache__

@@ -1,9 +1,10 @@
 # Set Up On Her Mac
 
 Loupe runs on the owner's own Mac, in the macOS account that is already signed
-into her iCloud. Her library and every file Loupe writes stay on that Mac. Loupe
-refuses to open a Photos library in any account other than the one named in
-`LOUPE_OWNER_MACOS_USER`.
+into her iCloud. Loupe refuses to open a Photos library in any account other than
+the one named in `LOUPE_OWNER_MACOS_USER`. Originals never leave the Mac. Sync
+(step 10) copies her eligible index, previews and embeddings to loupe-web so she
+can use Loupe from her phone.
 
 ## 1. Check Her Photos
 
@@ -156,3 +157,14 @@ uv run loupe app --open
 ```
 
 The app runs on http://127.0.0.1:8765 on her Mac only.
+
+## 10. Web Access
+
+Loupe.app has a Sync button on the Library tab when it was built with
+`LOUPE_WEB_URL` set in `.env`. She signs into Loupe.app with her Loupe account,
+runs Scan and Sort, then Sync. The first sync uploads about 34GB for 200k items.
+Later syncs send only new or changed items.
+
+Then, on any browser or phone, she opens the loupe-web URL and signs in with the
+same Loupe account. The web app has Library, Search, Brand, Hooks, Week and
+Everything. Sorting and Add To Photos run only in Loupe.app.

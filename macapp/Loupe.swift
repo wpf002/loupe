@@ -13,6 +13,7 @@ struct LaunchConfig: Decodable {
     let python: String
     let project: String
     let serverURL: String
+    let webURL: String?
 }
 
 func loadConfig() throws -> LaunchConfig {
@@ -97,6 +98,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         process.currentDirectoryURL = URL(fileURLWithPath: config.project)
         var environment = ProcessInfo.processInfo.environment
         environment["LOUPE_SERVER_URL"] = config.serverURL
+        if let webURL = config.webURL {
+            environment["LOUPE_WEB_URL"] = webURL
+        }
         environment["PYTHONUNBUFFERED"] = "1"
         process.environment = environment
         process.standardInput = backendInput

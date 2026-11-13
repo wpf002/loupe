@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from loupe.brand import BrandProfile
 from loupe.claude import ClaudeError, ProxyAuth, StructuredClient
@@ -16,6 +17,9 @@ from loupe.config import PillarConfig
 from loupe.settings import Settings, current_macos_user, owner_account_problem
 from loupe.transcribe import Transcript
 from loupe.week import PlannedPost, PlannedWeek
+
+if TYPE_CHECKING:
+    from loupe.search import TextEncoder
 
 OPENING_WORDS = 14
 HOOK_NUMBERS = range(1, 7)
@@ -203,6 +207,7 @@ def search_planner(
     config: PillarConfig,
     brand: BrandProfile,
     client_factory: Callable[[], StructuredClient],
+    encoder_factory: Callable[[], "TextEncoder"] | None = None,
 ) -> WeekPlanner:
     """Plans a week with Claude, picking assets through M6 search on the M2 vectors."""
 
@@ -215,7 +220,7 @@ def search_planner(
         from loupe.vectors import VectorStore, VectorStoreError
         from loupe.week import MEDIA_FOR_FORMAT, pillar_counts, plan_week, take_summaries
 
-        encoder = SiglipEncoder()
+        encoder = encoder_factory() if encoder_factory is not None else SiglipEncoder()
         try:
             store = VectorStore(vector_path(settings.data_dir, encoder.model_id))
         except VectorStoreError as error:

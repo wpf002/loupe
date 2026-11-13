@@ -3,7 +3,8 @@
 In Loupe.app (M15) an Onboarding is attached: until the user has signed in, granted
 Photos access and scanned, only the page, static files and /api/setup are served.
 
-Guards: bound to loopback only, Host header must name this server (stops DNS rebinding),
+Guards: bound to loopback unless a hosted demo binds wider, Host header must name this
+server (stops DNS rebinding),
 every POST needs the per-process token from the page plus a JSON body under the size cap,
 UUIDs are checked by pattern, thumbnails are served for eligible items only, and render
 files must resolve inside data/renders. Logs method, path and status only.
@@ -23,6 +24,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from loupe.index import connect, is_eligible
@@ -45,8 +47,13 @@ from loupe.studio import (
 )
 from loupe.week import PlannedWeek
 
+if TYPE_CHECKING:
+    from loupe.sync import Syncer
+
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+HEALTH_PATH = "/health"
+HOSTNAME_PATTERN = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 MAX_BODY_BYTES = 16_384
 TOKEN_HEADER = "X-Loupe-Token"  # noqa: S105 header name, not a secret
 UUID_PATTERN = re.compile(r"^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
@@ -55,6 +62,7 @@ STATIC_TYPES = {
     "theme.css": "text/css; charset=utf-8",
     "app.css": "text/css; charset=utf-8",
     "app.js": "text/javascript; charset=utf-8",
+    "login.js": "text/javascript; charset=utf-8",
 }
 RENDER_TYPES = {".png": "image/png", ".mp4": "video/mp4", ".txt": "text/plain; charset=utf-8"}
 FONT_TYPES = {".ttf": "font/ttf", ".otf": "font/otf", ".ttc": "font/collection"}
@@ -72,8 +80,9 @@ SECURITY_HEADERS = {
 MAX_EMAIL_LENGTH = 320
 MAX_PASSWORD_LENGTH = 1024
 LIBRARY_JOBS = frozenset({"/api/library/sort", "/api/library/albums"})
+SYNC_JOB = "/api/library/sync"
 MAX_SEARCH_LENGTH = 200
-OPEN_PATHS = frozenset({"/", "/api/setup", "/fonts/display", "/fonts/body"})
+OPEN_PATHS = frozenset({"/", HEALTH_PATH, "/api/setup", "/fonts/display", "/fonts/body"})
 MIN_REEL_SECONDS = 5.0
 MAX_REEL_SECONDS = 90.0
 
@@ -95,7 +104,13 @@ class FileReply:
     content_type: str
 
 
-Reply = Json | FileReply | str
+@dataclass(frozen=True)
+class Redirect:
+    location: str
+    headers: tuple[tuple[str, str], ...] = ()
+
+
+Reply = Json | FileReply | Redirect | str
 
 
 @dataclass
@@ -107,6 +122,13 @@ class App:
     busy: threading.Lock = field(default_factory=threading.Lock)
     onboarding: Onboarding | None = None
     sorter: Sorter | None = None
+    # Email of the signed-in account on the web service. None in Loupe.app and the CLI.
+    hosted_account: str | None = None
+    syncer: "Syncer | None" = None
+
+    @property
+    def hosted(self) -> bool:
+        return self.hosted_account is not None
 
     def _require_setup(self, path: str) -> None:
         """In Loupe.app nothing past setup is served until sign-in, Photos and a scan are done."""
@@ -124,6 +146,8 @@ class App:
         self._require_setup(path)
         if path == "/":
             return self.index_page()
+        if path == HEALTH_PATH:
+            return {"ok": True}
         if path == "/api/setup":
             return self.setup()
         if path.startswith("/static/"):
@@ -144,6 +168,7 @@ class App:
             "/api/everything": lambda: self.everything(_first(query, "start")),
             "/api/library": lambda: self._sort_call(lambda sorter: sorter.status()),
             "/api/search": lambda: self.search(query),
+            "/api/sync": lambda: self._sync_call(lambda syncer: syncer.status()),
         }
         if path in routes:
             return routes[path]()
@@ -158,6 +183,8 @@ class App:
             return self.setup_step(path.removeprefix("/api/setup/"), body)
         if path in LIBRARY_JOBS:
             return self.library_job(path, body)
+        if path == SYNC_JOB:
+            return self._sync_call(lambda syncer: syncer.start())
         if not self.busy.acquire(blocking=False):
             raise HttpError(HTTPStatus.CONFLICT, "Another job is running")
         try:
@@ -182,8 +209,21 @@ class App:
         except SortError as error:
             raise HttpError(error.status, str(error)) from error
 
+    def _sync_call(self, action: Callable[["Syncer"], Json]) -> Json:
+        from loupe.sync import SyncError
+
+        if self.syncer is None:
+            raise HttpError(HTTPStatus.NOT_FOUND, "Not found")
+        try:
+            return action(self.syncer)
+        except SyncError as error:
+            raise HttpError(HTTPStatus.CONFLICT, str(error)) from error
+
     def library_job(self, path: str, body: Json) -> Json:
         """Sorting runs in its own thread and lock, so the other tabs stay usable meanwhile."""
+        if self.hosted:
+            # Sorting reads Photos and writes albums, so it runs only in Loupe.app.
+            raise HttpError(HTTPStatus.NOT_FOUND, "Not found")
 
         def start(sorter: Sorter) -> Json:
             if path == "/api/library/sort":
@@ -210,6 +250,8 @@ class App:
         return {"hits": hits}
 
     def setup(self) -> Json:
+        if self.hosted_account is not None:
+            return {"mode": "hosted", "ready": True, "account": {"email": self.hosted_account}}
         if self.onboarding is None:
             return {"mode": "cli", "ready": True}
         return self._setup_call(self.onboarding.summary)
@@ -286,6 +328,8 @@ class App:
             "week": planned.start.isoformat() if planned else None,
             "busy": self.busy.locked(),
             "library": self.sorter is not None,
+            "hosted": self.hosted,
+            "sync": self.syncer is not None,
         }
 
     def brand(self) -> Json:
@@ -503,8 +547,19 @@ def _optional_str(body: Json, key: str) -> str | None:
     raise HttpError(HTTPStatus.BAD_REQUEST, f"{key} must be a string")
 
 
-def allowed_hosts(port: int) -> set[str]:
-    return {f"{HOST}:{port}", f"localhost:{port}"}
+def public_hostname(value: str) -> str:
+    """A bare DNS name such as demo.up.railway.app. No port, scheme or path."""
+    name = value.strip().lower()
+    if not HOSTNAME_PATTERN.fullmatch(name):
+        raise ValueError("public host must be a bare DNS name")
+    return name
+
+
+def allowed_hosts(port: int, public_host: str | None = None) -> set[str]:
+    hosts = {f"{HOST}:{port}", f"localhost:{port}"}
+    if public_host is not None:
+        hosts.add(public_hostname(public_host))
+    return hosts
 
 
 def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
@@ -526,126 +581,170 @@ def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
     return start, end
 
 
-def handler_for(app: App, port: int) -> type[BaseHTTPRequestHandler]:
-    hosts = allowed_hosts(port)
+class LoupeHandler(BaseHTTPRequestHandler):
+    """Serves one App. `handler_for` binds it; the hosted server subclasses it per account."""
 
-    class Handler(BaseHTTPRequestHandler):
-        server_version = "Loupe"
-        sys_version = ""
+    server_version = "Loupe"
+    sys_version = ""
+    hosts: frozenset[str] = frozenset()
+    bound_app: App | None = None
+    extra_headers: dict[str, str] = {}
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-            """Silence the default line; _log writes method, path and status."""
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        """Silence the default line; _log writes method, path and status."""
 
-        def _log(self, status: int) -> None:
-            logger.info("%s %s %d", self.command, urlsplit(self.path).path, status)
+    def _log(self, status: int) -> None:
+        logger.info("%s %s %d", self.command, urlsplit(self.path).path, status)
 
-        def _check_host(self) -> None:
-            if self.headers.get("Host") not in hosts:
-                raise HttpError(HTTPStatus.FORBIDDEN, "Wrong host")
+    def resolve_app(self) -> App:
+        if self.bound_app is None:
+            raise HttpError(HTTPStatus.NOT_FOUND, "Not found")
+        return self.bound_app
 
-        def do_GET(self) -> None:  # noqa: N802
-            self._dispatch(lambda: self._get())
+    def _check_host(self) -> None:
+        # The health probe carries the platform's own Host and returns no data.
+        if urlsplit(self.path).path == HEALTH_PATH:
+            return
+        if self.headers.get("Host") not in self.hosts:
+            raise HttpError(HTTPStatus.FORBIDDEN, "Wrong host")
 
-        def do_HEAD(self) -> None:  # noqa: N802
-            self._dispatch(lambda: self._get(), head=True)
+    def do_GET(self) -> None:  # noqa: N802
+        self._dispatch(self._get)
 
-        def do_POST(self) -> None:  # noqa: N802
-            self._dispatch(lambda: app.post(urlsplit(self.path).path, self._json_body()))
+    def do_HEAD(self) -> None:  # noqa: N802
+        self._dispatch(self._get, head=True)
 
-        def _get(self) -> Reply:
-            parts = urlsplit(self.path)
-            return app.get(parts.path, parse_qs(parts.query))
+    def do_POST(self) -> None:  # noqa: N802
+        self._dispatch(self._post)
 
-        def _json_body(self) -> Json:
+    def _get(self) -> Reply:
+        parts = urlsplit(self.path)
+        return self.resolve_app().get(parts.path, parse_qs(parts.query))
+
+    def _post(self) -> Reply:
+        app = self.resolve_app()
+        return app.post(urlsplit(self.path).path, self._json_body(app.token))
+
+    def _content_length(self, limit: int) -> int:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise HttpError(HTTPStatus.BAD_REQUEST, "Bad length") from error
+        if length < 0:
+            raise HttpError(HTTPStatus.BAD_REQUEST, "Bad length")
+        if length > limit:
+            raise HttpError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Body too large")
+        return length
+
+    def _json_body(self, expected_token: str | None) -> Json:
+        if expected_token is not None:
             token = self.headers.get(TOKEN_HEADER, "")
-            if not secrets.compare_digest(token, app.token):
+            if not secrets.compare_digest(token, expected_token):
                 raise HttpError(HTTPStatus.FORBIDDEN, "Missing token")
-            if not self.headers.get("Content-Type", "").startswith("application/json"):
-                raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "JSON only")
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-            except ValueError as error:
-                raise HttpError(HTTPStatus.BAD_REQUEST, "Bad length") from error
-            if length > MAX_BODY_BYTES:
-                raise HttpError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Body too large")
-            raw = self.rfile.read(length) if length > 0 else b"{}"
-            try:
-                body = json.loads(raw)
-            except json.JSONDecodeError as error:
-                raise HttpError(HTTPStatus.BAD_REQUEST, "Bad JSON") from error
-            if not isinstance(body, dict):
-                raise HttpError(HTTPStatus.BAD_REQUEST, "Body must be an object")
-            return body
+        if not self.headers.get("Content-Type", "").startswith("application/json"):
+            raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "JSON only")
+        length = self._content_length(MAX_BODY_BYTES)
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise HttpError(HTTPStatus.BAD_REQUEST, "Bad JSON") from error
+        if not isinstance(body, dict):
+            raise HttpError(HTTPStatus.BAD_REQUEST, "Body must be an object")
+        return body
 
-        def _dispatch(self, action: Callable[[], Reply], head: bool = False) -> None:
-            try:
-                self._check_host()
-                reply = action()
-            except HttpError as error:
-                self._send_json(error.status, {"error": error.message})
-                return
-            except StudioError as error:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-                return
-            except Exception:
-                logger.exception("%s %s failed", self.command, urlsplit(self.path).path)
-                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Internal error"})
-                return
-            if isinstance(reply, FileReply):
-                self._send_file(reply, head)
-            elif isinstance(reply, str):
-                self._send_bytes(HTTPStatus.OK, reply.encode(), "text/html; charset=utf-8", head)
-            else:
-                self._send_json(HTTPStatus.OK, reply, head)
+    def _dispatch(self, action: Callable[[], Reply], head: bool = False) -> None:
+        try:
+            self._check_host()
+            reply = action()
+        except HttpError as error:
+            self._send_json(error.status, {"error": error.message})
+            return
+        except StudioError as error:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        except Exception:
+            logger.exception("%s %s failed", self.command, urlsplit(self.path).path)
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Internal error"})
+            return
+        self.send_reply(reply, head)
 
-        def _headers(self, status: int, content_type: str, length: int) -> None:
-            self.send_response(status)
-            for name, value in SECURITY_HEADERS.items():
+    def send_reply(self, reply: Reply, head: bool = False) -> None:
+        if isinstance(reply, FileReply):
+            self._send_file(reply, head)
+        elif isinstance(reply, Redirect):
+            self._headers(HTTPStatus.SEE_OTHER, "text/plain; charset=utf-8", 0)
+            self.send_header("Location", reply.location)
+            for name, value in reply.headers:
                 self.send_header(name, value)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(length))
-            self._log(status)
-
-        def _send_bytes(self, status: int, body: bytes, content_type: str, head: bool) -> None:
-            self._headers(status, content_type, len(body))
             self.end_headers()
-            if not head:
-                self.wfile.write(body)
+        elif isinstance(reply, str):
+            self._send_bytes(HTTPStatus.OK, reply.encode(), "text/html; charset=utf-8", head)
+        else:
+            self._send_json(HTTPStatus.OK, reply, head)
 
-        def _send_json(self, status: int, body: Json, head: bool = False) -> None:
-            self._send_bytes(status, json.dumps(body).encode(), "application/json", head)
+    def _headers(self, status: int, content_type: str, length: int) -> None:
+        self.send_response(status)
+        for name, value in {**SECURITY_HEADERS, **self.extra_headers}.items():
+            self.send_header(name, value)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(length))
+        self._log(status)
 
-        def _send_file(self, reply: FileReply, head: bool) -> None:
-            size = reply.path.stat().st_size
-            try:
-                byte_range = parse_range(self.headers.get("Range"), size)
-            except HttpError as error:
-                self._send_json(error.status, {"error": error.message})
-                return
-            start, end = byte_range if byte_range else (0, size - 1)
-            status = HTTPStatus.PARTIAL_CONTENT if byte_range else HTTPStatus.OK
-            self._headers(status, reply.content_type, max(end - start + 1, 0))
-            self.send_header("Accept-Ranges", "bytes")
-            if byte_range:
-                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            self.end_headers()
-            if head or size == 0:
-                return
-            with reply.path.open("rb") as source:
-                source.seek(start)
-                remaining = end - start + 1
-                while remaining > 0:
-                    chunk = source.read(min(remaining, 1 << 16))
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    remaining -= len(chunk)
+    def _send_bytes(self, status: int, body: bytes, content_type: str, head: bool) -> None:
+        self._headers(status, content_type, len(body))
+        self.end_headers()
+        if not head:
+            self.wfile.write(body)
 
-    return Handler
+    def _send_json(self, status: int, body: Json, head: bool = False) -> None:
+        self._send_bytes(status, json.dumps(body).encode(), "application/json", head)
+
+    def _send_file(self, reply: FileReply, head: bool) -> None:
+        size = reply.path.stat().st_size
+        try:
+            byte_range = parse_range(self.headers.get("Range"), size)
+        except HttpError as error:
+            self._send_json(error.status, {"error": error.message})
+            return
+        start, end = byte_range if byte_range else (0, size - 1)
+        status = HTTPStatus.PARTIAL_CONTENT if byte_range else HTTPStatus.OK
+        self._headers(status, reply.content_type, max(end - start + 1, 0))
+        self.send_header("Accept-Ranges", "bytes")
+        if byte_range:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if head or size == 0:
+            return
+        with reply.path.open("rb") as source:
+            source.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                chunk = source.read(min(remaining, 1 << 16))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
 
 
-def make_server(app: App, port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((HOST, port), handler_for(app, port))
+def handler_for(
+    app: App, port: int, public_host: str | None = None
+) -> type[BaseHTTPRequestHandler]:
+    return type(
+        "Handler",
+        (LoupeHandler,),
+        {"bound_app": app, "hosts": frozenset(allowed_hosts(port, public_host))},
+    )
+
+
+def make_server(
+    app: App,
+    port: int = DEFAULT_PORT,
+    bind: str = HOST,
+    public_host: str | None = None,
+) -> ThreadingHTTPServer:
+    """Loupe.app and `loupe app` use the loopback defaults. Only the hosted demo changes them."""
+    server = ThreadingHTTPServer((bind, port), handler_for(app, port, public_host))
     server.daemon_threads = True
     return server
 

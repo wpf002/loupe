@@ -1,5 +1,6 @@
 """Loupe command line. Commands get added milestone by milestone (see CLAUDE.md)."""
 
+import os
 import sqlite3
 from collections.abc import Callable
 from datetime import date
@@ -29,6 +30,7 @@ from loupe.vectors import VectorStore
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 console = Console()
+WEB_URL_ENV = "LOUPE_WEB_URL"
 
 LimitOption = Annotated[
     int | None, typer.Option("--limit", min=1, help="Process only the first N items.")
@@ -733,6 +735,6 @@ def mac_app(
     if settings.server_url is None:
         raise _fail("LOUPE_SERVER_URL is not set")
     try:
-        run(settings.server_url, port)
+        run(settings.server_url, port, web_url=os.environ.get(WEB_URL_ENV) or None)
     except MacAppError as error:
         raise _fail(str(error)) from error

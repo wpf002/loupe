@@ -16,11 +16,16 @@ against them.
    `LOUPE_ALBUM_FOLDER`. Loupe creates that folder and owns everything in it.
 3. `write-albums` is a dry run unless `--apply` is passed. The dry run prints
    per-album counts.
-4. Nothing under `data/` is ever committed. Nothing leaves this machine except
-   what the generation stages (M10 on) send to Claude: downsized previews,
-   transcripts, and her own text. In the app these pass through the Loupe server
-   (`server/`), which forwards them to the Claude API and never stores or logs
-   them. Never send originals, embeddings, face data, or GPS coordinates.
+4. Nothing under `data/` is ever committed. Two things leave the Mac:
+   - Generation stages (M10 on) send Claude downsized previews, transcripts and
+     her own text. In the app these pass through the Loupe server (`server/`),
+     which forwards them to the Claude API and never stores or logs them.
+   - Sync (`loupe.sync`) sends the signed-in account's eligible index (no person
+     names), previews, embeddings, pillars and brand to loupe-web
+     (`loupe.hosted`). loupe-web stores them on its Railway volume under that
+     account's folder only. The owner approved this on 2026-11-12.
+   Never send originals, face data, or GPS coordinates. Never send embeddings to
+   Claude.
 5. The CLI reads `ANTHROPIC_API_KEY` from `.env`. The app sends the account's
    session token to the Loupe server, and the Anthropic key lives only on the
    server. Both log counts and UUIDs only. The owner approved sending her content
@@ -36,11 +41,14 @@ against them.
     after the user signs into a Loupe account and grants access, and records the
     macOS user who granted it; it refuses any other user. Never weaken either
     check. The developer's own library is never read, scanned, or used as a
-    stand-in.
+    stand-in. loupe-web never opens a Photos library. It serves only what an
+    account synced, to a browser signed into that same account, and refuses
+    sorting and album writes.
 11. Items matching `[exclusions]` in the config, and hidden items, are stored as
     UUID plus reason only. Person names are stored for eligible items only and
-    never logged. Every stage after scan reads its work list from
-    `index.eligible_uuids()` and nothing else.
+    never logged and never synced. Every stage after scan reads its work list
+    from `index.eligible_uuids()` and nothing else. Sync uploads eligible items
+    only, and loupe-web drops an item when a later sync no longer lists it.
 
 ## Stack
 

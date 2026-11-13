@@ -164,6 +164,8 @@ def test_state_and_brand(running: Running) -> None:
         "week": None,
         "busy": False,
         "library": False,
+        "hosted": False,
+        "sync": False,
     }
     brand = json.loads(running.request("GET", "/api/brand")[2])
     assert brand["colors"]["accent"] == "#A8681A"

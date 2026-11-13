@@ -139,7 +139,12 @@ def stop_on_eof(stream: TextIO, stop: Callable[[], None]) -> threading.Thread:
     return thread
 
 
-def run(server_url: str, port: int | None = None, root: Path = APP_SUPPORT) -> None:
+def run(
+    server_url: str,
+    port: int | None = None,
+    root: Path = APP_SUPPORT,
+    web_url: str | None = None,
+) -> None:
     """Build everything for the signed-in macOS user, print the URL, serve."""
     from loupe.account import AccountClient, KeychainTokenStore, Session
     from loupe.encoder import SiglipEncoder
@@ -148,6 +153,7 @@ def run(server_url: str, port: int | None = None, root: Path = APP_SUPPORT) -> N
     from loupe.server import App, make_server
     from loupe.settings import current_macos_user
     from loupe.sorting import Sorter
+    from loupe.sync import Syncer
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     paths = app_paths(root)
@@ -171,8 +177,19 @@ def run(server_url: str, port: int | None = None, root: Path = APP_SUPPORT) -> N
         SiglipEncoder,
         lambda: PhotoKitWriter(settings.album_folder, paths.data_dir, user),
     )
+    syncer = None
+    if web_url is not None:
+        syncer = Syncer(
+            web_url,
+            session.token,
+            paths.data_dir,
+            onboarding.index_path,
+            lambda: load_optional_brand(paths.config_dir),
+            pillars or DEFAULT_PILLARS,
+        )
     chosen = port or free_port()
-    server = make_server(App(studio, onboarding=onboarding, sorter=sorter), chosen)
+    app = App(studio, onboarding=onboarding, sorter=sorter, syncer=syncer)
+    server = make_server(app, chosen)
     stop_on_eof(sys.stdin, server.shutdown)
     print(f"{URL_PREFIX}http://{HOST}:{chosen}/", flush=True)  # noqa: T201 - read by the launcher
     logger.info("serving on port %d", chosen)

@@ -1,4 +1,4 @@
-"""SigLIP image encoder through open_clip, on the MPS device."""
+"""SigLIP image encoder through open_clip. MPS on the Mac, CPU text-only on the web server."""
 
 from collections.abc import Sequence
 from typing import Any
@@ -14,7 +14,9 @@ MODEL_ID = f"{MODEL_NAME}/{PRETRAINED}"
 
 
 class SiglipEncoder:
-    def __init__(self, device: str = DEVICE) -> None:
+    def __init__(
+        self, device: str = DEVICE, precision: str = PRECISION, text_only: bool = False
+    ) -> None:
         import open_clip
         import torch
 
@@ -22,14 +24,20 @@ class SiglipEncoder:
         self.device = device
         self.model_id = MODEL_ID
         self.model, _, self._preprocess = open_clip.create_model_and_transforms(
-            MODEL_NAME, pretrained=PRETRAINED, device=device, precision=PRECISION
+            MODEL_NAME, pretrained=PRETRAINED, device=device, precision=precision
         )
+        if text_only:
+            # The web server only encodes search text. Dropping the image tower frees its memory.
+            del self.model.visual
+        self.text_only = text_only
         self.model.eval()
         self.dtype = next(self.model.parameters()).dtype
         self.tokenizer = open_clip.get_tokenizer(MODEL_NAME)
         self.dim = self._probe_dim()
 
     def _probe_dim(self) -> int:
+        if self.text_only:
+            return int(self.encode_texts(["probe"]).shape[1])
         blank = Image.new("RGB", (32, 32))
         return int(self.encode([self.preprocess(blank)]).shape[1])
 

@@ -1,0 +1,16 @@
+# The hosted web app (loupe.hosted) on Linux. Transitive pins come from uv.lock at build time.
+# torch and torchvision install from the PyTorch CPU index.
+anthropic==2.8.0
+imageio-ffmpeg==0.8.1
+numpy==2.5.4
+open-clip-torch==4.2.2
+pillow==13.0.0
+pillow-heif==1.8.1
+pydantic==2.14.3
+python-dotenv==1.2.4
+rich==15.0.0
+scikit-learn==1.9.1
+torch==2.15.0
+torchvision==0.29.2
+typer==0.29.1
+transformers==5.22.2
